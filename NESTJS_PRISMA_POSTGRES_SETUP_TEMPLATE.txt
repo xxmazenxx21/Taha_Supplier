@@ -1,0 +1,781 @@
+NESTJS PRISMA POSTGRES SETUP TEMPLATE
+====================================
+
+Purpose
+-------
+This document captures only the reusable technical foundation for a new, unrelated NestJS backend project. It intentionally excludes business logic, domain entities, and app-specific features. The goal is to reproduce the same backend infrastructure pattern in a fresh project.
+
+1. Technology Stack
+-------------------
+Core stack:
+- Node.js
+- NestJS 11
+- TypeScript 5.7
+- PostgreSQL
+- Prisma ORM 7
+- Prisma Postgres adapter for PostgreSQL
+- JWT authentication via @nestjs/jwt
+- Passport-compatible JWT guard pattern (via custom guard + raw bearer token verification)
+- Configuration management via @nestjs/config
+- DTO validation via class-validator and class-transformer
+- bcrypt for password hashing
+- NestJS Express platform
+
+Exact foundation dependencies from the project:
+Dependencies:
+- @nestjs/common: ^11.0.1
+- @nestjs/config: ^4.0.4
+- @nestjs/core: ^11.0.1
+- @nestjs/jwt: ^11.0.2
+- @nestjs/mapped-types: *
+- @nestjs/platform-express: ^11.0.1
+- @prisma/adapter-pg: ^7.9.1
+- @prisma/client: ^7.9.1
+- bcrypt: ^6.0.0
+- class-transformer: ^0.5.1
+- class-validator: ^0.15.1
+- reflect-metadata: ^0.2.2
+- rxjs: ^7.8.1
+
+Dev dependencies:
+- @nestjs/cli: ^11.0.0
+- @nestjs/schematics: ^11.0.0
+- @nestjs/testing: ^11.0.1
+- @types/bcrypt: ^6.0.0
+- @types/express: ^5.0.0
+- @types/jest: ^30.0.0
+- @types/node: ^24.0.0
+- @types/supertest: ^7.0.0
+- eslint: ^9.18.0
+- eslint-config-prettier: ^10.0.1
+- eslint-plugin-prettier: ^5.2.2
+- globals: ^17.0.0
+- jest: ^30.0.0
+- prettier: ^3.4.2
+- prisma: ^7.9.1
+- source-map-support: ^0.5.21
+- supertest: ^7.0.0
+- ts-jest: ^29.2.5
+- ts-loader: ^9.5.2
+- ts-node: ^10.9.2
+- tsconfig-paths: ^4.2.0
+- typescript: ^5.7.3
+- typescript-eslint: ^8.20.0
+
+2. Project Folder Structure
+---------------------------
+Reusable architecture layout:
+
+src/
+├── main.ts
+├── app.module.ts
+├── app.controller.ts
+├── app.service.ts
+├── prisma/
+│   ├── prisma.module.ts
+│   └── prisma.service.ts
+├── auth/
+│   ├── auth.module.ts
+│   ├── auth.service.ts
+│   ├── auth.controller.ts
+│   └── dto/
+├── guards/
+│   ├── auth.guard.ts
+│   └── roles.guard.ts
+├── decorators/
+│   ├── public.decorator.ts
+│   └── roles.decorator.ts
+├── utils/
+│   ├── hash/
+│   └── enum/
+├── common/
+├── config/
+├── filters/
+├── interceptors/
+├── middleware/
+├── modules/
+└── dto/
+
+Project root:
+- prisma/
+  - schema.prisma
+  - migrations/
+- prisma.config.ts
+- tsconfig.json
+- tsconfig.build.json
+- package.json
+- .env
+
+Important note:
+- The actual project contains business modules, but the reusable infrastructure pattern is the generic NestJS core, Prisma service/module, config module, JWT guard, decorators, DTOs, and bootstrap setup.
+
+3. Package Installation
+-----------------------
+Use the following commands to recreate the reusable technical foundation in a new project:
+
+npm install @nestjs/common@^11.0.1 @nestjs/config@^4.0.4 @nestjs/core@^11.0.1 @nestjs/jwt@^11.0.2 @nestjs/mapped-types@* @nestjs/platform-express@^11.0.1 @prisma/adapter-pg@^7.9.1 @prisma/client@^7.9.1 bcrypt@^6.0.0 class-transformer@^0.5.1 class-validator@^0.15.1 reflect-metadata@^0.2.2 rxjs@^7.8.1
+
+npm install -D @nestjs/cli@^11.0.0 @nestjs/schematics@^11.0.0 @nestjs/testing@^11.0.1 @types/bcrypt@^6.0.0 @types/express@^5.0.0 @types/jest@^30.0.0 @types/node@^24.0.0 @types/supertest@^7.0.0 eslint@^9.18.0 eslint-config-prettier@^10.0.1 eslint-plugin-prettier@^5.2.2 globals@^17.0.0 jest@^30.0.0 prettier@^3.4.2 prisma@^7.9.1 source-map-support@^0.5.21 supertest@^7.0.0 ts-jest@^29.2.5 ts-loader@^9.5.2 ts-node@^10.9.2 tsconfig-paths@^4.2.0 typescript@^5.7.3 typescript-eslint@^8.20.0
+
+After installation, initialize NestJS and Prisma:
+
+npx nest new project-name
+npx prisma init
+
+4. package.json Setup
+--------------------
+The project uses a standard NestJS package structure with Prisma integration in scripts.
+
+Important scripts:
+- build: prisma generate && nest build
+- format: prettier --write "src/**/*.ts" "test/**/*.ts"
+- start: nest start
+- start:dev: nest start --watch
+- start:debug: nest start --debug --watch
+- start:prod: node dist/src/main.js
+- lint: eslint "{src,apps,libs,test}/**/*.ts" --fix
+- test: jest
+- test:watch: jest --watch
+- test:cov: jest --coverage
+- test:debug: node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand
+- test:e2e: jest --config ./test/jest-e2e.json
+- prisma:generate: prisma generate
+- db:migrate: prisma migrate deploy
+
+Key characteristics:
+- Prisma generation is included in the build step.
+- Production start path points to dist/src/main.js.
+- Jest is configured for TypeScript tests.
+- rootDir is src for tests; coverage output is ../coverage.
+
+Exact package.json scripts section:
+{
+  "scripts": {
+    "build": "prisma generate && nest build",
+    "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
+    "start": "nest start",
+    "start:dev": "nest start --watch",
+    "start:debug": "nest start --debug --watch",
+    "start:prod": "node dist/src/main.js",
+    "lint": "eslint \"{src,apps,libs,test}/**/*.ts\" --fix",
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "test:cov": "jest --coverage",
+    "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
+    "test:e2e": "jest --config ./test/jest-e2e.json",
+    "prisma:generate": "prisma generate",
+    "db:migrate": "prisma migrate deploy"
+  }
+}
+
+5. TypeScript Configuration
+---------------------------
+tsconfig.json:
+{
+  "compilerOptions": {
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "resolvePackageJsonExports": true,
+    "esModuleInterop": true,
+    "isolatedModules": true,
+    "declaration": true,
+    "removeComments": true,
+    "emitDecoratorMetadata": true,
+    "experimentalDecorators": true,
+    "allowSyntheticDefaultImports": true,
+    "target": "ES2023",
+    "sourceMap": true,
+    "outDir": "./dist",
+    "incremental": true,
+    "skipLibCheck": true,
+    "strictNullChecks": true,
+    "forceConsistentCasingInFileNames": true,
+    "noImplicitAny": false,
+    "strictBindCallApply": false,
+    "noFallthroughCasesInSwitch": false,
+    "strictPropertyInitialization": false
+  }
+}
+
+tsconfig.build.json:
+{
+  "extends": "./tsconfig.json",
+  "exclude": ["node_modules", "test", "dist", "**/*spec.ts"]
+}
+
+Why these settings matter:
+- module and moduleResolution are set to nodenext for modern Node and Prisma compatibility.
+- emitDecoratorMetadata and experimentalDecorators enable NestJS decorators and dependency injection.
+- esModuleInterop and allowSyntheticDefaultImports simplify interop with CommonJS-era libraries.
+- strictNullChecks and strictPropertyInitialization help catch null and initialization bugs.
+- outDir dist is the standard NestJS build output path.
+- incremental improves rebuild speed.
+- skipLibCheck reduces noise from third-party type packages.
+
+6. NestJS Configuration
+----------------------
+main.ts:
+import { NestFactory } from '@nestjs/core';
+import { ValidationPipe } from '@nestjs/common';
+import { AppModule } from './app.module';
+
+async function bootstrap() {
+  const app = await NestFactory.create(AppModule);
+
+  app.useGlobalPipes(new ValidationPipe());
+
+  app.enableCors({
+    origin: true,
+    methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',
+    credentials: true,
+  });
+
+  await app.listen(process.env.PORT ?? 3000);
+}
+bootstrap();
+
+Reusable configuration patterns:
+- Bootstraps the root app module.
+- Applies a global validation pipe so all DTOs are validated automatically.
+- Enables CORS with credential support for browser-based clients.
+- Uses process.env.PORT with a fallback of 3000.
+- No custom global prefix is configured, which means routes are mounted at the default root path.
+
+Global app module pattern:
+import { Module } from '@nestjs/common';
+import { AppController } from './app.controller';
+import { AppService } from './app.service';
+import { PrismaModule } from './prisma/prisma.module';
+import { ConfigModule, ConfigService } from '@nestjs/config';
+import { JwtModule } from '@nestjs/jwt';
+import { APP_GUARD } from '@nestjs/core';
+import { AuthGuard } from './guards/auth.guard';
+import { RolesGuard } from './guards/roles.guard';
+
+@Module({
+  imports: [
+    ConfigModule.forRoot({ isGlobal: true }),
+    JwtModule.registerAsync({
+      imports: [ConfigModule],
+      useFactory: async (configService: ConfigService) => ({
+        secret: configService.get<string>('JWT_SECRET') || 'defaultSecret',
+        signOptions: { expiresIn: '3650d' },
+      }),
+      inject: [ConfigService],
+      global: true,
+    }),
+    PrismaModule,
+    AuthModule,
+  ],
+  controllers: [AppController],
+  providers: [
+    AppService,
+    {
+      provide: APP_GUARD,
+      useClass: AuthGuard,
+    },
+    {
+      provide: APP_GUARD,
+      useClass: RolesGuard,
+    },
+  ],
+})
+export class AppModule {}
+
+Key reusable patterns:
+- ConfigModule.forRoot({ isGlobal: true }) loads environment variables across the app.
+- JwtModule is registered globally for injection everywhere.
+- Global guards are registered with APP_GUARD.
+- PrismaModule is imported at the app level.
+
+7. Prisma Setup
+---------------
+Prisma installation:
+- npm install @prisma/client@^7.9.1
+- npm install -D prisma@^7.9.1
+- npm install @prisma/adapter-pg@^7.9.1
+
+Prisma configuration file:
+prisma.config.ts
+
+// This file was generated by Prisma, and assumes you have installed the following:
+// npm install --save-dev prisma dotenv
+import "dotenv/config";
+import { defineConfig } from "prisma/config";
+
+export default defineConfig({
+  schema: "prisma",
+  migrations: {
+    path: "prisma/migrations",
+  },
+  datasource: {
+    url: process.env.DATABASE_URL,
+  },
+});
+
+Important details:
+- Prisma config is stored at the project root.
+- The schema folder is prisma/.
+- Migration directory is prisma/migrations.
+- The datasource URL is pulled from DATABASE_URL.
+
+Prisma schema location and generator:
+generator client {
+  provider     = "prisma-client"
+  output       = "../generated/prisma"
+  moduleFormat = "cjs"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+Reusable implications:
+- Client is generated into a custom generated/prisma folder.
+- moduleFormat is cjs.
+- PostgreSQL is configured as the database provider.
+- The schema is intentionally kept separate from the app source tree.
+
+PrismaModule:
+import { Module } from '@nestjs/common';
+import { PrismaService } from './prisma.service';
+
+@Module({
+  providers: [PrismaService],
+  exports: [PrismaService],
+})
+export class PrismaModule {}
+
+PrismaService:
+import { Injectable, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import { PrismaClient } from '../../generated/prisma/client.js';
+import { PrismaPg } from '@prisma/adapter-pg';
+
+@Injectable()
+export class PrismaService
+  extends PrismaClient
+  implements OnModuleInit, OnModuleDestroy
+{
+  constructor() {
+    console.log('DATABASE_URL is:', process.env.DATABASE_URL);
+    const adapter = new PrismaPg({
+      connectionString: process.env.DATABASE_URL,
+    });
+    super({ adapter });
+  }
+
+  async onModuleInit() {
+    await this.$connect();
+    console.log('✅ Prisma connected');
+  }
+
+  async onModuleDestroy() {
+    await this.$disconnect();
+    console.log('❌ Prisma disconnected');
+  }
+}
+
+Reusable patterns:
+- PrismaService extends PrismaClient for dependency injection and type-safe database access.
+- PrismaPg adapter is used with the PostgreSQL connection string.
+- Connecting and disconnecting happen via NestJS lifecycle hooks.
+- The service is exported from PrismaModule so other modules can inject it.
+- The generated Prisma client is imported from generated/prisma/client.js.
+
+Prisma + NestJS compatibility notes:
+- Prisma client is custom-generated outside src to match the project setup.
+- Prisma adapter initialization is done in the constructor before the client is used.
+- Prisma connection is started in onModuleInit and closed in onModuleDestroy.
+- The generated client path is not in the default node_modules path; the import must match the actual generated output.
+
+Database migration commands:
+- npx prisma generate
+- npx prisma migrate dev
+- npx prisma migrate deploy
+- npx prisma studio
+
+8. Environment Variables
+------------------------
+Use only placeholder values; never paste real credentials.
+
+Required reusable environment variables:
+- PORT=3000
+- DATABASE_URL=postgresql://USER:PASSWORD@HOST:PORT/DATABASE
+- JWT_SECRET=replace-with-long-random-secret
+
+Optional generic values:
+- NODE_ENV=development
+- CORS_ORIGIN=http://localhost:3000
+
+Do not commit real secrets, API keys, or tokens.
+
+9. Authentication Infrastructure
+--------------------------------
+This project includes a reusable JWT authentication and authorization pattern.
+
+JWT module registration:
+JwtModule.registerAsync({
+  imports: [ConfigModule],
+  useFactory: async (configService: ConfigService) => ({
+    secret: configService.get<string>('JWT_SECRET') || 'defaultSecret',
+    signOptions: { expiresIn: '3650d' },
+  }),
+  inject: [ConfigService],
+  global: true,
+})
+
+Reusable authentication guard:
+import {
+    CanActivate,
+    ExecutionContext,
+    Injectable,
+    UnauthorizedException,
+} from '@nestjs/common';
+import { JwtService } from '@nestjs/jwt';
+import { Request } from 'express';
+import { Reflector } from '@nestjs/core';
+import { IS_PUBLIC_KEY } from '../decorators/public.decorator';
+
+@Injectable()
+export class AuthGuard implements CanActivate {
+    constructor(private readonly jwtService: JwtService, private readonly reflector: Reflector) { }
+
+    async canActivate(context: ExecutionContext): Promise<boolean> {
+        const isPublic = this.reflector.getAllAndOverride<boolean>(IS_PUBLIC_KEY, [
+            context.getHandler(),
+            context.getClass(),
+        ]);
+        if (isPublic) {
+            return true;
+        }
+
+        const request = context.switchToHttp().getRequest();
+        const token = this.extractTokenFromHeader(request);
+        if (!token) {
+            throw new UnauthorizedException();
+        }
+        try {
+            const payload = await this.jwtService.verifyAsync(token);
+            request['user'] = payload;
+        } catch {
+            throw new UnauthorizedException();
+        }
+        return true;
+    }
+
+    private extractTokenFromHeader(request: Request): string | undefined {
+        const [type, token] = request.headers.authorization?.split(' ') ?? [];
+        return type === 'Bearer' ? token : undefined;
+    }
+}
+
+Public decorator:
+import { SetMetadata } from '@nestjs/common';
+
+export const IS_PUBLIC_KEY = 'isPublic';
+export const Public = () => SetMetadata(IS_PUBLIC_KEY, true);
+
+Role-based guard:
+import { Injectable, CanActivate, ExecutionContext, ForbiddenException } from '@nestjs/common';
+import { Reflector } from '@nestjs/core';
+import { ROLES_KEY } from '../decorators/roles.decorator';
+
+@Injectable()
+export class RolesGuard implements CanActivate {
+  constructor(private reflector: Reflector) {}
+
+  canActivate(context: ExecutionContext): boolean {
+    const requiredRoles = this.reflector.getAllAndOverride<string[]>(ROLES_KEY, [
+      context.getHandler(),
+      context.getClass(),
+    ]);
+    if (!requiredRoles) {
+      return true;
+    }
+    const { user } = context.switchToHttp().getRequest();
+    if (!user || !user.role) {
+      throw new ForbiddenException('You do not have permission (no role found)');
+    }
+
+    if (requiredRoles.includes(user.role)) {
+      return true;
+    }
+
+    throw new ForbiddenException('You do not have the required roles to access this resource');
+  }
+}
+
+Roles decorator:
+import { SetMetadata } from '@nestjs/common';
+export const ROLES_KEY = 'roles';
+export const Roles = (...roles: string[]) => SetMetadata(ROLES_KEY, roles);
+
+Generic auth service pattern:
+import { Injectable, UnauthorizedException } from '@nestjs/common';
+import { JwtService } from '@nestjs/jwt';
+import { PrismaService } from '../prisma/prisma.service';
+
+@Injectable()
+export class AuthService {
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly jwtService: JwtService,
+  ) {}
+
+  async login(loginDto: any) {
+    const credential = await this.prisma.someEntity.findUnique({
+      where: { identifier: loginDto.identifier },
+    });
+
+    if (!credential) {
+      throw new UnauthorizedException('Invalid credentials');
+    }
+
+    const payload = { sub: credential.id, username: credential.username, role: credential.role };
+    return {
+      access_token: await this.jwtService.signAsync(payload),
+      user: {
+        id: credential.id,
+        username: credential.username,
+        role: credential.role,
+      },
+    };
+  }
+}
+
+Reusable ideas:
+- Use a custom guard to verify bearer tokens globally.
+- Use @Public() to bypass auth for public endpoints.
+- Use Roles and a permission guard to enforce claims.
+- Attach authenticated payload to request.user.
+- Keep JWT secrets in environment variables.
+
+10. Generic Coding Patterns
+---------------------------
+Controller pattern:
+import { Controller, Get, Post, Body } from '@nestjs/common';
+
+@Controller('example')
+export class ExampleController {
+  constructor(private readonly exampleService: ExampleService) {}
+
+  @Get()
+  findAll() {
+    return this.exampleService.findAll();
+  }
+
+  @Post()
+  create(@Body() dto: CreateExampleDto) {
+    return this.exampleService.create(dto);
+  }
+}
+
+Service pattern:
+import { Injectable } from '@nestjs/common';
+import { PrismaService } from '../prisma/prisma.service';
+
+@Injectable()
+export class ExampleService {
+  constructor(private readonly prisma: PrismaService) {}
+
+  async findAll() {
+    return this.prisma.exampleEntity.findMany();
+  }
+
+  async create(dto: CreateExampleDto) {
+    return this.prisma.exampleEntity.create({ data: dto });
+  }
+}
+
+Module pattern:
+import { Module } from '@nestjs/common';
+import { PrismaModule } from '../prisma/prisma.module';
+import { ExampleController } from './example.controller';
+import { ExampleService } from './example.service';
+
+@Module({
+  imports: [PrismaModule],
+  controllers: [ExampleController],
+  providers: [ExampleService],
+})
+export class ExampleModule {}
+
+DTO validation pattern:
+import { IsString, IsNotEmpty, MinLength } from 'class-validator';
+
+export class CreateExampleDto {
+  @IsString()
+  @IsNotEmpty()
+  @MinLength(3)
+  name: string;
+}
+
+Use the validation pipe globally in main.ts to enforce this automatically.
+
+Dependency injection pattern:
+- Modules provide services.
+- Services inject PrismaService.
+- Controllers inject services.
+- Guards inject JwtService and Reflector.
+- ConfigService is injected via async factory configuration.
+
+11. Error Handling
+------------------
+This project uses NestJS standard HTTP exceptions and a global validation pipe for error handling.
+
+Examples of reusable exceptions used in services:
+- UnauthorizedException for invalid credentials or expired tokens
+- ForbiddenException for insufficient permissions
+- BadRequestException for invalid or duplicate payloads
+- NotFoundException for missing records
+
+Validation errors are handled automatically by the global ValidationPipe (with class-validator).
+
+Global validation pipe:
+app.useGlobalPipes(new ValidationPipe());
+
+This ensures DTO validation errors become structured NestJS HTTP validation responses instead of ad hoc manual checks.
+
+Prisma-related errors are not globally normalized in this project; the typical architecture is to catch Prisma exceptions in service code and map them into NestJS HTTP exceptions as needed.
+
+Recommended generic error-handling pattern for new projects:
+- Validate DTOs centrally with ValidationPipe.
+- Throw standard NestJS exceptions from services.
+- Keep auth errors as UnauthorizedException or ForbiddenException.
+- For Prisma errors, catch PrismaClientKnownRequestError and map to BadRequestException or NotFoundException as appropriate.
+
+12. Application Architecture
+----------------------------
+Technical architecture pattern:
+
+Client / Browser
+      |
+      v
+NestJS HTTP layer
+      |
+      v
+Controller
+      |
+      v
+Service
+      |
+      v
+PrismaService
+      |
+      v
+PostgreSQL
+
+Core interaction model:
+- Controllers receive HTTP requests.
+- Services encapsulate business or technical operations.
+- PrismaService provides database access via PrismaClient.
+- Modules organize dependencies and exports.
+- Guards enforce authentication and authorization globally.
+- ConfigModule loads environment config centrally.
+- JWT tokens carry identity/role claims.
+- DTOs enforce payload validation before hitting service methods.
+
+Each module usually follows this pattern:
+- module.ts
+- controller.ts
+- service.ts
+- dto/
+
+The application is built around modularization, dependency injection, and a central Prisma data access layer.
+
+13. Development Commands
+------------------------
+Common commands for a fresh project based on this setup:
+
+npm install
+npm run start:dev
+npm run build
+npm run start:prod
+npm run test
+npm run test:e2e
+npm run lint
+npm run format
+npx prisma generate
+npx prisma migrate dev
+npx prisma migrate deploy
+npx prisma studio
+
+14. Production Setup
+--------------------
+Production-ready infrastructure pattern:
+- Build the project with NestJS after Prisma generation.
+- Set production environment variables before boot.
+- Run Prisma generate during the build so the client matches the schema.
+- Run Prisma migrations before starting in a database-backed environment.
+- Start the compiled server via node dist/src/main.js.
+
+Build flow:
+- npm run build
+- then node dist/src/main.js
+
+Production safety notes:
+- Use DATABASE_URL from a secure environment source.
+- Use JWT_SECRET from a secure secret manager or environment file.
+- Set PORT appropriately for the deployment runtime.
+- Ensure Prisma client is generated in CI/CD before deploying.
+- Ensure migration steps are run before application boot in production if the database is managed separately.
+
+15. Important Problems / Gotchas
+--------------------------------
+These are the technical issues and compatibility patterns that matter when reproducing the same foundation:
+
+1. Prisma adapter and generated client path
+- The project imports PrismaClient from generated/prisma/client.js instead of the default generated location.
+- If the output path changes or the client is regenerated in a different location, imports will fail.
+- Reproduction must preserve the generated output configuration.
+
+2. Prisma generate must run before build
+- The build script explicitly runs prisma generate before nest build.
+- This avoids stale generated client issues after schema changes.
+
+3. NodeNext TypeScript configuration is required for this Prisma pattern
+- The project uses module and moduleResolution set to nodenext.
+- This matters for modern Node and Prisma ESM/CJS compatibility.
+
+4. DATABASE_URL must be present before startup
+- PrismaService creates a PrismaPg adapter using process.env.DATABASE_URL.
+- Missing or invalid database URLs will break startup.
+
+5. JWT secret must exist
+- The app sets the JWT secret from JWT_SECRET with a fallback only for local development.
+- Production should never rely on default secrets.
+
+6. Global guards can block all routes if not configured correctly
+- APP_GUARD is used to register auth and role checks globally.
+- Public endpoints must use the @Public() decorator.
+- If a new route is unauthenticated but not marked public, it will be blocked.
+
+7. CORS must be enabled when browser clients are used
+- The project enables CORS with credentials and origin true.
+- This is a common requirement for frontend-backend separation.
+
+8. ValidationPipe should be global
+- Without a global validation pipe, DTO validation will not run automatically.
+- This is a core reusable pattern for clean request validation.
+
+9. Prisma lifecycle hooks are important
+- Prisma connects in onModuleInit and disconnects in onModuleDestroy.
+- This is the clean NestJS lifecycle pattern for database clients.
+
+10. Production start path should match compiled output
+- The project starts with node dist/src/main.js.
+- This is a common gotcha when moving from src-based NestJS dev mode to built production mode.
+
+Blueprint Summary
+-----------------
+This project is a reusable NestJS + Prisma + PostgreSQL backend foundation built on:
+- NestJS 11 with TypeScript 5 and decorator-based DI
+- Prisma ORM 7 with PostgreSQL and PrismaPg adapter
+- Global environment configuration via @nestjs/config
+- Global DTO validation via ValidationPipe
+- JWT-based auth with public-route bypass and role-based guard enforcement
+- PrismaService exported from PrismaModule for dependency injection
+- Lifecycle-based Prisma connection management
+- Standard Node production build and run flow
+
+This is the technical blueprint to copy into any new, unrelated backend project.
