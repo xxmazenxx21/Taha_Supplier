@@ -1,0 +1,32 @@
+// Prisma model for users
+
+enum UserRole {
+  CLIENT
+  ADMIN
+  DELIVERY
+  ORDERS_STAFF
+  ACCOUNTS_STAFF
+  SUPPORT
+}
+
+enum UserStatus {
+  ACTIVE
+  BANNED
+}
+
+model User {
+  id           Int        @id @default(autoincrement())
+  role         UserRole
+  name         String
+  shop_name    String? // for `CLIENT` (cafe owner) only
+  phone        String     @unique
+  email        String?    @unique
+  password     String
+  address      String?
+  latitude     Decimal?   @db.Decimal(10, 7)
+  longitude    Decimal?   @db.Decimal(10, 7)
+  status       UserStatus @default(ACTIVE)
+  block_reason String?
+  created_at   DateTime   @default(now())
+  updated_at   DateTime   @updatedAt
+}

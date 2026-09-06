@@ -1,0 +1,82 @@
+ADMIN DASHBOARD API
+Base URL: http://localhost:3000
+
+AUTHENTICATION
+For every protected endpoint, send this header:
+Authorization: Bearer <access_token>
+
+1. ADMIN LOGIN
+POST /auth/adminDashboard/login
+Public endpoint — no token required.
+
+Body (application/json):
+{
+  "email": "admin@example.com",
+  "password": "password123"
+}
+
+Success response includes access_token and the admin user object.
+Only users whose role is ADMIN can log in through this endpoint.
+
+
+2. CREATE CATEGORY
+POST /category
+Requires: ADMIN token
+Content-Type: multipart/form-data
+
+Fields:
+- name: string (required)
+- image: JPEG, JPG, PNG, or WebP file (required, maximum 5 MB)
+- display_order: integer (optional, default: 0)
+- is_hidden: boolean (optional, default: false)
+
+
+3. UPDATE CATEGORY
+PATCH /category/:id
+Requires: ADMIN token
+Content-Type: multipart/form-data
+
+Fields:
+- name: string (optional)
+- image: JPEG, JPG, PNG, or WebP file (optional; replaces and deletes the old local image)
+- display_order: integer (optional)
+- is_hidden: boolean (optional)
+
+
+4. DELETE / HIDE CATEGORY
+DELETE /category/:id
+Requires: ADMIN token
+
+This is a soft delete. It sets is_hidden to true and keeps the category/image.
+
+
+5. CREATE BRAND
+POST /brand
+Requires: ADMIN token
+Content-Type: multipart/form-data
+
+Fields:
+- name: string (required, unique)
+- logo: JPEG, JPG, PNG, or WebP file (required, maximum 5 MB)
+
+
+6. UPDATE BRAND
+PATCH /brand/:id
+Requires: ADMIN token
+Content-Type: multipart/form-data
+
+Fields:
+- name: string (optional, unique)
+- logo: image file (optional; replaces and deletes the previous local logo)
+
+
+7. DELETE BRAND
+DELETE /brand/:id
+Requires: ADMIN token
+
+This is a soft delete. It sets deleted_at and keeps the brand/logo for recovery.
+
+
+NOT DOCUMENTED HERE
+- POST /auth/adminDashboard/signup (temporary endpoint; planned for deletion)
+- All GET endpoints (reserved for the Flutter mobile application)

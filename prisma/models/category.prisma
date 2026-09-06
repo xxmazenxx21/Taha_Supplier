@@ -1,0 +1,10 @@
+// Product categories, such as coffee, chocolate, cups, and machines.
+
+model Category {
+  id            Int      @id @default(autoincrement())
+  name          String
+  image         String
+  display_order Int      @default(0)
+  is_hidden     Boolean  @default(false)
+  created_at    DateTime @default(now())
+}

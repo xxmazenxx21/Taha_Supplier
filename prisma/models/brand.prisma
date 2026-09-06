@@ -1,0 +1,10 @@
+// Product brands, such as coffee or machine manufacturers.
+
+model Brand {
+  id         Int       @id @default(autoincrement())
+  name       String    @unique
+  logo       String
+  created_at DateTime  @default(now())
+  updated_at DateTime  @updatedAt
+  deleted_at DateTime?
+}
