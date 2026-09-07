@@ -1,0 +1,113 @@
+CATEGORY API
+Base URL: http://localhost:3000
+
+This file contains only the implemented category endpoints.
+
+GENERAL RULES
+- All category routes except public ones require a valid JWT.
+- Authorization header format: Authorization: Bearer <token>
+- Admin-only routes require user.role === ADMIN
+- Missing/invalid token => 401 Unauthorized
+- Missing role => 403 Forbidden
+  { "message": "You do not have permission (no role found)", "error": "Forbidden", "statusCode": 403 }
+- Non-admin role => 403 Forbidden
+  { "message": "You do not have the required roles to access this resource", "error": "Forbidden", "statusCode": 403 }
+
+COMMON FILE RULES
+- Multipart form field name for uploads must be image
+- Allowed mime types: image/jpeg, image/jpg, image/png, image/webp
+- Max file size: 5MB (5242880 bytes)
+
+COMMON FILE ERRORS
+- Missing file => 400 Bad Request
+  { "message": "File is required", "error": "Bad Request", "statusCode": 400 }
+- File too large => 400 Bad Request
+  { "message": "Validation failed (current file size is 5242880, expected size is less than 5242880)", "error": "Bad Request", "statusCode": 400 }
+- Wrong mime / wrong file type => 400 Bad Request
+  { "message": "Validation failed (file buffer is not available; file type validation could not be performed; expected type is /^image\\/(jpeg|jpg|png|webp)$/)", "error": "Bad Request", "statusCode": 400 }
+- Wrong field name => 400 Bad Request
+  { "message": "Unexpected field - <field name>", "error": "Bad Request", "statusCode": 400 }
+
+COMMON VALIDATION ERROR
+- DTO validation failure => 400 Bad Request
+- Example:
+  {
+    "message": ["name must be longer than or equal to 2 characters"],
+    "error": "Bad Request",
+    "statusCode": 400
+  }
+
+1) POST /category
+Admin only
+Content-Type: multipart/form-data
+
+Request body (form-data):
+- name: string; required; min length 2
+- display_order?: number; optional; integer; min 0
+- is_hidden?: boolean; optional; accepts "true" / "false"
+
+Success response:
+Created category object from Prisma, for example:
+{
+  id: number,
+  name: string,
+  display_order: number,
+  is_hidden: boolean,
+  created_at: Date,
+  updated_at: Date
+}
+
+Possible errors:
+- 401 Unauthorized if token missing/invalid
+- 403 Forbidden if role missing
+- 403 Forbidden if role is not ADMIN
+- 400 Bad Request if DTO validation fails
+- 400 Bad Request if image file is missing
+- 400 Bad Request if image size is >= 5MB
+- 400 Bad Request if image mime type is invalid
+- 400 Bad Request if uploaded field name is not image
+
+2) PATCH /category/:id
+Admin only
+Content-Type: multipart/form-data
+
+Optional form-data fields:
+- name?: string; min length 2
+- display_order?: number; integer; min 0
+- is_hidden?: boolean
+- image?: file
+
+Success response:
+Updated category object
+
+Possible errors:
+- 401 Unauthorized if token missing/invalid
+- 403 Forbidden if role missing
+- 403 Forbidden if role is not ADMIN
+- 400 Bad Request if DTO validation fails
+- 400 Bad Request if image file size is >= 5MB
+- 400 Bad Request if image mime type is invalid
+- 400 Bad Request if uploaded field name is not image
+- 404 Not Found if category id does not exist
+  { "message": "Category not found", "error": "Not Found", "statusCode": 404 }
+- 500 Internal Server Error if id is invalid after unchecked +id conversion
+- 500 Internal Server Error if old image deletion fails for a reason other than ENOENT
+
+3) DELETE /category/:id
+Admin only
+
+Behavior:
+- This does not delete the category row
+- It sets is_hidden to true
+
+Success response:
+Updated category object with is_hidden: true
+
+Possible errors:
+- 401 Unauthorized if token missing/invalid
+- 403 Forbidden if role missing
+- 403 Forbidden if role is not ADMIN
+- 500 Internal Server Error if id is invalid or Prisma update fails because it is not translated to 404
+
+IMPORTANT NOTE
+- GET /category and GET /category/:id are not implemented and should not be used from the frontend.

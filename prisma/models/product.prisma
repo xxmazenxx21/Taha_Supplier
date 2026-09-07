@@ -1,0 +1,34 @@
+enum ProductStatus {
+  AVAILABLE
+  UNAVAILABLE
+}
+
+model Product {
+  id             Int           @id @default(autoincrement())
+  category_id    Int
+  brand_id       Int
+  name           String
+  description    String        @db.Text
+  image          String
+  price          Decimal       @db.Decimal(10, 2)
+  discount_price Decimal?      @db.Decimal(10, 2)
+  unit           String
+  status         ProductStatus @default(AVAILABLE)
+  display_order  Int           @default(0)
+  created_at     DateTime      @default(now())
+  updated_at     DateTime      @updatedAt
+
+  category Category       @relation(fields: [category_id], references: [id])
+  brand    Brand          @relation(fields: [brand_id], references: [id])
+  images   ProductImage[]
+}
+
+model ProductImage {
+  id            Int      @id @default(autoincrement())
+  product_id    Int
+  image_url     String
+  display_order Int      @default(0)
+  created_at    DateTime @default(now())
+
+  product Product @relation(fields: [product_id], references: [id], onDelete: Cascade)
+}

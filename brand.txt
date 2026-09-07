@@ -1,0 +1,118 @@
+BRAND API
+Base URL: http://localhost:3000
+
+This file contains only the implemented brand endpoints.
+
+GENERAL RULES
+- All brand routes except public ones require a valid JWT.
+- Authorization header format: Authorization: Bearer <token>
+- Admin-only routes require user.role === ADMIN
+- Missing/invalid token => 401 Unauthorized
+- Missing role => 403 Forbidden
+  { "message": "You do not have permission (no role found)", "error": "Forbidden", "statusCode": 403 }
+- Non-admin role => 403 Forbidden
+  { "message": "You do not have the required roles to access this resource", "error": "Forbidden", "statusCode": 403 }
+
+COMMON FILE RULES
+- Multipart form field name for uploads must be logo
+- Allowed mime types: image/jpeg, image/jpg, image/png, image/webp
+- Max file size: 5MB (5242880 bytes)
+
+COMMON FILE ERRORS
+- Missing file => 400 Bad Request
+  { "message": "File is required", "error": "Bad Request", "statusCode": 400 }
+- File too large => 400 Bad Request
+  { "message": "Validation failed (current file size is 5242880, expected size is less than 5242880)", "error": "Bad Request", "statusCode": 400 }
+- Wrong mime / wrong file type => 400 Bad Request
+  { "message": "Validation failed (file buffer is not available; file type validation could not be performed; expected type is /^image\\/(jpeg|jpg|png|webp)$/)", "error": "Bad Request", "statusCode": 400 }
+- Wrong field name => 400 Bad Request
+  { "message": "Unexpected field - <field name>", "error": "Bad Request", "statusCode": 400 }
+
+COMMON VALIDATION ERROR
+- DTO validation failure => 400 Bad Request
+- Example:
+  {
+    "message": ["name must be longer than or equal to 2 characters"],
+    "error": "Bad Request",
+    "statusCode": 400
+  }
+
+1) POST /brand
+Admin only
+Content-Type: multipart/form-data
+
+Request body (form-data):
+- name: string; required; min length 2
+- logo: file; required
+
+Success response:
+Created brand object from Prisma, for example:
+{
+  id: number,
+  name: string,
+  logo: string,
+  created_at: Date,
+  updated_at: Date,
+  deleted_at: Date | null
+}
+
+Possible errors:
+- 401 Unauthorized if token missing/invalid
+- 403 Forbidden if role missing
+- 403 Forbidden if role is not ADMIN
+- 400 Bad Request if DTO validation fails
+- 400 Bad Request if logo file is missing
+- 400 Bad Request if logo size is >= 5MB
+- 400 Bad Request if logo mime type is invalid
+- 400 Bad Request if uploaded field name is not logo
+- 409 Conflict if brand name already exists
+  { "message": "Brand with this name already exists", "error": "Conflict", "statusCode": 409 }
+- 500 Internal Server Error if create fails after upload; backend tries to remove uploaded file before rethrowing
+
+2) PATCH /brand/:id
+Admin only
+Content-Type: multipart/form-data
+
+Optional form-data fields:
+- name?: string; min length 2
+- logo?: file
+
+Success response:
+Updated brand object
+
+Possible errors:
+- 401 Unauthorized if token missing/invalid
+- 403 Forbidden if role missing
+- 403 Forbidden if role is not ADMIN
+- 400 Bad Request if DTO validation fails
+- 400 Bad Request if logo file size is >= 5MB
+- 400 Bad Request if logo mime type is invalid
+- 400 Bad Request if uploaded field name is not logo
+- 404 Not Found if no active brand matches the id
+  { "message": "Brand not found", "error": "Not Found", "statusCode": 404 }
+- 409 Conflict if another brand already has the same name
+  { "message": "Brand with this name already exists", "error": "Conflict", "statusCode": 409 }
+- 500 Internal Server Error if id is invalid after unchecked +id conversion
+- 500 Internal Server Error if deleting the old logo file fails for a reason other than ENOENT
+
+3) DELETE /brand/:id
+Admin only
+
+Behavior:
+- Soft delete
+- Sets deleted_at to current date
+- Does not delete the logo file
+
+Success response:
+Updated brand object with deleted_at set
+
+Possible errors:
+- 401 Unauthorized if token missing/invalid
+- 403 Forbidden if role missing
+- 403 Forbidden if role is not ADMIN
+- 404 Not Found if no active brand matches the id
+  { "message": "Brand not found", "error": "Not Found", "statusCode": 404 }
+- 500 Internal Server Error if id is invalid after unchecked +id conversion
+
+IMPORTANT NOTE
+- GET /brand and GET /brand/:id are not implemented and should not be used from the frontend.

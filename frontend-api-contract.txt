@@ -1,0 +1,262 @@
+FRONTEND API CONTRACT
+Base URL: http://localhost:3000
+
+IMPORTANT
+- Only implemented APIs are documented here.
+- Do not use GET /category, GET /category/:id, GET /brand, GET /brand/:id, or GET /.
+- All non-public routes require:
+  Authorization: Bearer <token>
+
+COMMON HTTP ERRORS
+401 Unauthorized
+- Missing, malformed, expired, or invalid token
+
+403 Forbidden
+- Missing role in token
+  { "message": "You do not have permission (no role found)", "error": "Forbidden", "statusCode": 403 }
+- Role is not ADMIN for admin-only endpoints
+  { "message": "You do not have the required roles to access this resource", "error": "Forbidden", "statusCode": 403 }
+
+400 Bad Request
+- DTO validation failed
+- Extra fields rejected
+- Example:
+  {
+    "message": ["name must be longer than or equal to 2 characters"],
+    "error": "Bad Request",
+    "statusCode": 400
+  }
+
+409 Conflict
+- Email already exists
+- Phone already exists
+- Brand name already exists
+
+404 Not Found
+- Category or brand not found
+
+FILE UPLOAD RULES
+- Category upload field name: image
+- Brand upload field name: logo
+- Allowed types: image/jpeg, image/jpg, image/png, image/webp
+- Max size: 5MB
+- Requests must use multipart/form-data
+
+AUTH
+
+1) POST /auth/signup
+Public
+Body:
+{
+  name: string,      // required, min 2
+  shop_name?: string,// optional, min 2
+  phone: string,     // required, valid international phone
+  email?: string,    // optional, valid email
+  password: string,  // required, min 8
+  address?: string,
+  latitude?: number,
+  longitude?: number
+}
+
+Success 200:
+{
+  access_token: string,
+  user: {
+    id: number,
+    name: string,
+    email: string | null,
+    phone: string,
+    role: "CLIENT"
+  }
+}
+
+Errors:
+- 400 validation error
+- 409 email exists
+- 409 phone exists
+
+2) POST /auth/login
+Public
+Body:
+{
+  email: string,
+  password: string
+}
+
+Success 200:
+{
+  access_token: string,
+  user: {
+    id: number,
+    name: string,
+    email: string,
+    phone: string,
+    role: string
+  }
+}
+
+Errors:
+- 400 validation error
+- 401 Invalid email or password
+
+3) POST /auth/adminDashboard/signup
+Public
+Body:
+{
+  name: string,
+  email: string,
+  password: string,
+  phone: string
+}
+
+Success 201/200:
+{
+  id: number,
+  name: string,
+  email: string,
+  phone: string,
+  role: "ADMIN"
+}
+
+Errors:
+- 500 Internal Server Error if Prisma/create fails
+
+4) POST /auth/adminDashboard/login
+Public
+Body:
+{
+  email: string,
+  password: string
+}
+
+Success 200:
+{
+  access_token: string,
+  user: {
+    id: number,
+    name: string,
+    email: string,
+    phone: string,
+    role: "ADMIN"
+  }
+}
+
+Errors:
+- 400 validation error
+- 401 Invalid email or password
+
+CATEGORY
+
+5) POST /category
+Admin only
+FormData:
+- name: string (required, min 2)
+- display_order?: number (optional, integer, min 0)
+- is_hidden?: boolean (optional, accepts true/false)
+
+Success 201:
+{
+  id: number,
+  name: string,
+  display_order: number,
+  is_hidden: boolean,
+  created_at: Date,
+  updated_at: Date
+}
+
+Errors:
+- 401 unauthorized
+- 403 forbidden
+- 400 validation / missing file / invalid mime / invalid size
+
+6) PATCH /category/:id
+Admin only
+FormData:
+- name?: string
+- display_order?: number
+- is_hidden?: boolean
+- image?: file
+
+Success 200:
+Updated category object
+
+Errors:
+- 401 unauthorized
+- 403 forbidden
+- 400 validation / invalid size / invalid mime
+- 404 Category not found
+
+7) DELETE /category/:id
+Admin only
+Behavior:
+- Sets is_hidden = true
+- Does not delete the row
+
+Success 200:
+Updated category object
+
+Errors:
+- 401 unauthorized
+- 403 forbidden
+- 500 if id invalid or Prisma update fails
+
+BRAND
+
+8) POST /brand
+Admin only
+FormData:
+- name: string (required, min 2)
+- logo: file (required)
+
+Success 201:
+{
+  id: number,
+  name: string,
+  logo: string,
+  created_at: Date,
+  updated_at: Date,
+  deleted_at: Date | null
+}
+
+Errors:
+- 401 unauthorized
+- 403 forbidden
+- 400 validation / missing file / invalid size / invalid mime
+- 409 Brand with this name already exists
+
+9) PATCH /brand/:id
+Admin only
+FormData:
+- name?: string
+- logo?: file
+
+Success 200:
+Updated brand object
+
+Errors:
+- 401 unauthorized
+- 403 forbidden
+- 400 validation / invalid size / invalid mime
+- 404 Brand not found
+- 409 duplicate brand name
+
+10) DELETE /brand/:id
+Admin only
+Behavior:
+- Soft delete
+- Sets deleted_at = now
+
+Success 200:
+Updated brand object with deleted_at set
+
+Errors:
+- 401 unauthorized
+- 403 forbidden
+- 404 Brand not found
+
+QUICK FRONTEND NOTES
+- Always send Bearer token for admin routes.
+- Use multipart/form-data for category and brand create/update.
+- For uploads, exact field names are required: image or logo.
+- Brand names are unique; category names are not unique in the current backend model.
+- Sign-up and login are the only public routes in this app.

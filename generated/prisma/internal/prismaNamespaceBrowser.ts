@@ -53,6 +53,8 @@ export const AnyNull = runtime.AnyNull
 export const ModelName = {
   Brand: 'Brand',
   Category: 'Category',
+  Product: 'Product',
+  ProductImage: 'ProductImage',
   User: 'User'
 } as const
 
@@ -87,13 +89,42 @@ export type BrandScalarFieldEnum = (typeof BrandScalarFieldEnum)[keyof typeof Br
 export const CategoryScalarFieldEnum = {
   id: 'id',
   name: 'name',
-  image: 'image',
   display_order: 'display_order',
   is_hidden: 'is_hidden',
   created_at: 'created_at'
 } as const
 
 export type CategoryScalarFieldEnum = (typeof CategoryScalarFieldEnum)[keyof typeof CategoryScalarFieldEnum]
+
+
+export const ProductScalarFieldEnum = {
+  id: 'id',
+  category_id: 'category_id',
+  brand_id: 'brand_id',
+  name: 'name',
+  description: 'description',
+  image: 'image',
+  price: 'price',
+  discount_price: 'discount_price',
+  unit: 'unit',
+  status: 'status',
+  display_order: 'display_order',
+  created_at: 'created_at',
+  updated_at: 'updated_at'
+} as const
+
+export type ProductScalarFieldEnum = (typeof ProductScalarFieldEnum)[keyof typeof ProductScalarFieldEnum]
+
+
+export const ProductImageScalarFieldEnum = {
+  id: 'id',
+  product_id: 'product_id',
+  image_url: 'image_url',
+  display_order: 'display_order',
+  created_at: 'created_at'
+} as const
+
+export type ProductImageScalarFieldEnum = (typeof ProductImageScalarFieldEnum)[keyof typeof ProductImageScalarFieldEnum]
 
 
 export const UserScalarFieldEnum = {
