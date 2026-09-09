@@ -16,11 +16,13 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { UserRole } from '../../generated/prisma/client.js';
 import { Roles } from '../decorators/roles.decorator';
 import { multerOptions } from '../utils/multer/multer';
-import { getUploadDirectory, getUploadPublicPath, UploadFolder } from '../utils/multer/upload-paths';
+import {
+  getUploadPublicPath,
+  UploadFolder,
+} from '../utils/multer/upload-paths';
 import { BrandService } from './brand.service';
 import { CreateBrandDto } from './dto/create-brand.dto';
 import { UpdateBrandDto } from './dto/update-brand.dto';
-import { unlink } from 'fs/promises';
 
 @Controller('brand')
 export class BrandController {
@@ -32,6 +34,7 @@ export class BrandController {
   async create(
     @Body() createBrandDto: CreateBrandDto,
     @UploadedFile(
+      // Secondary defense-in-depth, primary is handled by multerOptions
       new ParseFilePipe({
         validators: [
           new MaxFileSizeValidator({ maxSize: 5 * 1024 * 1024 }),
@@ -41,16 +44,10 @@ export class BrandController {
     )
     logo: Express.Multer.File,
   ) {
-    try {
-      return await this.brandService.create({
+    return await this.brandService.create({
       ...createBrandDto,
       logo: getUploadPublicPath(UploadFolder.BRANDS, logo.filename),
     });
-    } catch (error) {
-         // لو فشلت عملية الحفظ في الداتابيز لأي سبب، امسح الملف اليتيم من الديسك
-    await unlink(getUploadDirectory(UploadFolder.BRANDS) + `/${logo.filename}`).catch(() => {});
-    throw error;
-    }   
   }
 
   @Get()
@@ -70,6 +67,7 @@ export class BrandController {
     @Param('id') id: string,
     @Body() updateBrandDto: UpdateBrandDto,
     @UploadedFile(
+      // Secondary defense-in-depth, primary is handled by multerOptions
       new ParseFilePipe({
         fileIsRequired: false,
         validators: [
@@ -83,7 +81,9 @@ export class BrandController {
     return this.brandService.update(
       +id,
       updateBrandDto,
-      logo ? getUploadPublicPath(UploadFolder.BRANDS, logo.filename) : undefined,
+      logo
+        ? getUploadPublicPath(UploadFolder.BRANDS, logo.filename)
+        : undefined,
     );
   }
 

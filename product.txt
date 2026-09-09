@@ -1,0 +1,121 @@
+Product API - Frontend Integration Guide
+
+Overview
+- Base path: /product
+- Auth: All endpoints require an authenticated admin token (Role: ADMIN)
+- Storage: Main product image stored in `image` field; gallery images via `ProductImage` records.
+
+Endpoints
+
+1) Create product
+- Method: POST
+- Path: /product
+- Auth: ADMIN
+- Content-Type: multipart/form-data
+- Form fields (JSON fields):
+  - name (string)
+  - description (string)
+  - price (string/decimal)
+  - discount_price (string/decimal, optional)
+  - unit (string)
+  - category_id (number)
+  - brand_id (number)
+  - display_order (number, optional)
+  - status (optional) - usually omitted for creation
+- File fields:
+  - image (single) - required: main product image
+  - images (multiple) - optional: gallery files
+- Notes: Creates product and gallery images in a single request. Returns the created product including `images` array.
+- Errors: 400 (validation), 400 if category/brand invalid, 500 for server errors
+
+2) Update product (no gallery replacement)
+- Method: PATCH
+- Path: /product/:id
+- Auth: ADMIN
+- Content-Type: multipart/form-data (only when replacing main image)
+- Updatable fields (in body): name, description, price, discount_price, unit, category_id, brand_id, display_order, status
+- File fields:
+  - image (single) - optional. If provided, replaces main image; old main image is deleted after successful DB update.
+- Important: This endpoint no longer updates or replaces gallery images. Manage gallery via dedicated endpoints.
+- Returns: updated product with `images` included
+- Errors: 404 if product not found, 400 if category/brand invalid
+
+3) Soft-delete product
+- Method: DELETE
+- Path: /product/:id
+- Auth: ADMIN
+- Behavior: Marks product `status` as `UNAVAILABLE` (soft delete). Does not remove DB rows or gallery images.
+- Returns: updated product
+- Errors: 404 if product not found
+
+4) Add gallery images (new)
+- Method: POST
+- Path: /product/:id/images
+- Auth: ADMIN
+- Content-Type: multipart/form-data
+- File field: images (multiple) - one or more files
+- Behavior:
+  - Validates product exists first. If product not found, uploaded files are removed from disk and 404 returned.
+  - Creates new `ProductImage` rows appended to the product (maintains display_order).
+  - On DB failure, newly uploaded files are deleted from disk.
+- Returns: the product (with `images`) after insertion
+- Errors: 400 if no files provided, 404 if product not found, 500 on server error
+
+5) Delete single gallery image (new)
+- Method: DELETE
+- Path: /product/:id/images/:imageId
+- Auth: ADMIN
+- Behavior:
+  - Checks that the `ProductImage` with id = `imageId` belongs to product `id`. If not found, returns 404.
+  - Deletes the DB row, then deletes the corresponding file from disk.
+  - If DB delete fails, file is not removed.
+- Returns: { success: true }
+- Errors: 404 if image not found or not belonging to product, 500 on server error
+
+Response shape (example product):
+{
+  id: number,
+  name: string,
+  description: string,
+  image: "/uploads/products/abcd.jpg", // main image public path
+  price: "10.00",
+  discount_price: "8.00" | null,
+  unit: string,
+  status: "AVAILABLE" | "UNAVAILABLE",
+  display_order: number,
+  images: [
+    { id: number, product_id: number, image_url: "/uploads/products/x.jpg", display_order: number },
+  ],
+  created_at: string,
+  updated_at: string,
+}
+
+Error codes to handle on frontend
+- 400: Bad request / validation errors
+- 404: Product or image not found
+- 401/403: Unauthorized / forbidden when not an admin
+- 500: Server error
+
+Example: Add gallery images (fetch)
+
+fetch(`/product/${productId}/images`, {
+  method: 'POST',
+  headers: {
+    'Authorization': 'Bearer <token>'
+  },
+  body: formData // append multiple files under 'images'
+})
+
+Example: Delete gallery image
+fetch(`/product/${productId}/images/${imageId}`, {
+  method: 'DELETE',
+  headers: { 'Authorization': 'Bearer <token>' }
+})
+
+Notes for frontend
+- Use multipart/form-data for endpoints that upload files.
+- Ensure to pass admin auth token for protected endpoints.
+- When replacing main image via PATCH, backend removes old main image only after DB update succeeds.
+- Gallery images are managed exclusively via POST /product/:id/images and DELETE /product/:id/images/:imageId.
+
+

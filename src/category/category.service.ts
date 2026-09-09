@@ -21,10 +21,7 @@ export class CategoryService {
     return `This action returns a #${id} category`;
   }
 
-  async update(
-    id: number,
-    updateCategoryDto: UpdateCategoryDto,
-  ) {
+  async update(id: number, updateCategoryDto: UpdateCategoryDto) {
     const category = await this.prisma.category.findUnique({ where: { id } });
 
     if (!category) {

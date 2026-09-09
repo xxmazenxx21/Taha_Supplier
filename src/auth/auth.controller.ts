@@ -20,7 +20,6 @@ export class AuthController {
     return this.authService.login(loginDto);
   }
 
-
   @Post('adminDashboard/signup')
   @Public()
   adminDashboardSignup(
@@ -40,6 +39,4 @@ export class AuthController {
   adminDashboardLogin(@Body() loginDto: LoginDto) {
     return this.authService.adminDashboardLogin(loginDto);
   }
-
-
 }

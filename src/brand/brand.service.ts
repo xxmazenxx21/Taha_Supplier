@@ -1,5 +1,10 @@
-import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
-import { unlink } from 'node:fs/promises';
+import {
+  ConflictException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
+import { promises as fs } from 'node:fs';
+import { join } from 'node:path';
 import { basename, resolve } from 'node:path';
 import { PrismaService } from '../prisma/prisma.service';
 import { getUploadDirectory, UploadFolder } from '../utils/multer/upload-paths';
@@ -16,12 +21,18 @@ export class BrandService {
     });
 
     if (existingBrand) {
+      // Duplicate name detected before DB write — clean up the already-uploaded logo
+      await this.deleteLocalFiles([createBrandDto.logo]);
       throw new ConflictException('Brand with this name already exists');
     }
-    return await this.prisma.brand.create({
-      data: createBrandDto,
-      
-    });
+
+    try {
+      return await this.prisma.brand.create({ data: createBrandDto });
+    } catch (error) {
+      // DB write failed for any other reason — clean up the orphaned logo
+      await this.deleteLocalFiles([createBrandDto.logo]);
+      throw error;
+    }
   }
 
   findAll() {
@@ -42,6 +53,8 @@ export class BrandService {
     });
 
     if (!brand) {
+      // Brand not found — clean up newly uploaded logo if any
+      if (newLogoPath) await this.deleteLocalFiles([newLogoPath]);
       throw new NotFoundException('Brand not found');
     }
 
@@ -51,23 +64,32 @@ export class BrandService {
       });
 
       if (duplicateBrand) {
+        // Duplicate name — clean up newly uploaded logo if any
+        if (newLogoPath) await this.deleteLocalFiles([newLogoPath]);
         throw new ConflictException('Brand with this name already exists');
       }
     }
 
-    const updatedBrand = await this.prisma.brand.update({
-      where: { id },
-      data: {
-        ...updateBrandDto,
-        ...(newLogoPath && { logo: newLogoPath }),
-      },
-    });
+    try {
+      const updatedBrand = await this.prisma.brand.update({
+        where: { id },
+        data: {
+          ...updateBrandDto,
+          ...(newLogoPath && { logo: newLogoPath }),
+        },
+      });
 
-    if (newLogoPath && brand.logo !== newLogoPath) {
-      await this.deleteOldLogo(brand.logo);
+      // DB write succeeded — now safe to delete the old logo from disk
+      if (newLogoPath && brand.logo !== newLogoPath) {
+        await this.deleteOldLogo(brand.logo);
+      }
+
+      return updatedBrand;
+    } catch (error) {
+      // DB write failed — clean up the new logo that was already saved to disk
+      if (newLogoPath) await this.deleteLocalFiles([newLogoPath]);
+      throw error;
     }
-
-    return updatedBrand;
   }
 
   async remove(id: number) {
@@ -85,6 +107,20 @@ export class BrandService {
     });
   }
 
+  /**
+   * Deletes local files by their public URL paths (e.g. /uploads/brands/xxx.jpg).
+   * Errors are silently swallowed — a missing file should never crash a request.
+   */
+  private async deleteLocalFiles(publicPaths: string[]): Promise<void> {
+    await Promise.all(
+      publicPaths.map((p) => fs.unlink(join(process.cwd(), p)).catch(() => {})),
+    );
+  }
+
+  /**
+   * Deletes the old logo file from disk after a successful logo replacement.
+   * Only acts on paths within the brands upload folder to prevent path traversal.
+   */
   private async deleteOldLogo(logoPath: string | null): Promise<void> {
     const uploadPrefix = `/uploads/${UploadFolder.BRANDS}/`;
 
@@ -96,6 +132,7 @@ export class BrandService {
     const filePath = resolve(brandsDirectory, basename(logoPath));
 
     try {
+      const { unlink } = await import('node:fs/promises');
       await unlink(filePath);
     } catch (error: unknown) {
       if (
@@ -106,7 +143,6 @@ export class BrandService {
       ) {
         return;
       }
-
       throw error;
     }
   }

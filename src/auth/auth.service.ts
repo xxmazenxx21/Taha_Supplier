@@ -34,29 +34,32 @@ export class AuthService {
     }
 
     const hashedPassword = await hashPassword(signupDto.password);
- let user;
+    let user;
 
-  try {
-    user = await this.prisma.user.create({
-      data: {
-        name: signupDto.name,
-        shop_name: signupDto.shop_name,
-        email: signupDto.email,
-        phone: signupDto.phone,
-        address: signupDto.address,
-        latitude: signupDto.latitude,
-        longitude: signupDto.longitude,
-        password: hashedPassword,
-        role: UserRole.CLIENT,
-      },
-    });
-  } catch (error) {
-    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
-      const field = (error.meta?.target as string[])?.[0];
-      throw new ConflictException(`${field} already exists`);
+    try {
+      user = await this.prisma.user.create({
+        data: {
+          name: signupDto.name,
+          shop_name: signupDto.shop_name,
+          email: signupDto.email,
+          phone: signupDto.phone,
+          address: signupDto.address,
+          latitude: signupDto.latitude,
+          longitude: signupDto.longitude,
+          password: hashedPassword,
+          role: UserRole.CLIENT,
+        },
+      });
+    } catch (error) {
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === 'P2002'
+      ) {
+        const field = (error.meta?.target as string[])?.[0];
+        throw new ConflictException(`${field} already exists`);
+      }
+      throw error;
     }
-    throw error;
-  }
 
     const access_token = await this.jwtService.signAsync({
       sub: user.id,
@@ -142,19 +145,19 @@ export class AuthService {
     const user = await this.prisma.user.findUnique({
       where: { email: loginDto.email },
     });
-const DUMMY_HASH = '$2b$10$CwTycUXWue0Thq9StjUM0uJ8k9jI0GzX2gY2p6qU2n8g3rL7g9O1e';
-   const isValidAdmin = !!user && user.role === UserRole.ADMIN;
+    const DUMMY_HASH =
+      '$2b$10$CwTycUXWue0Thq9StjUM0uJ8k9jI0GzX2gY2p6qU2n8g3rL7g9O1e';
+    const isValidAdmin = !!user && user.role === UserRole.ADMIN;
 
-  // بتعمل المقارنة دايمًا، حتى لو الـ user مش موجود أو مش أدمن، عشان الزمن يفضل ثابت
-  const isPasswordValid = await comparePassword(
-    loginDto.password,
-    isValidAdmin ? user.password : DUMMY_HASH,
-  );
+    // بتعمل المقارنة دايمًا، حتى لو الـ user مش موجود أو مش أدمن، عشان الزمن يفضل ثابت
+    const isPasswordValid = await comparePassword(
+      loginDto.password,
+      isValidAdmin ? user.password : DUMMY_HASH,
+    );
 
-  if (!isValidAdmin || !isPasswordValid) {
-    throw new UnauthorizedException('Invalid email or password');
-  }
-   
+    if (!isValidAdmin || !isPasswordValid) {
+      throw new UnauthorizedException('Invalid email or password');
+    }
 
     const access_token = await this.jwtService.signAsync({
       sub: user.id,

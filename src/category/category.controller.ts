@@ -33,8 +33,7 @@ export class CategoryController {
     return this.categoryService.findOne(+id);
   }
 
-
-@Patch(':id')
+  @Patch(':id')
   @Roles(UserRole.ADMIN)
   update(
     @Param('id') id: string,
@@ -42,12 +41,6 @@ export class CategoryController {
   ) {
     return this.categoryService.update(+id, updateCategoryDto);
   }
-
-
-
-
-
-
 
   @Delete(':id')
   @Roles(UserRole.ADMIN)

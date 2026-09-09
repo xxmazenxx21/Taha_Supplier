@@ -1,4 +1,4 @@
-import { Transform, Type } from 'class-transformer';
+import { Type } from 'class-transformer';
 import {
   IsEnum,
   IsInt,
@@ -30,7 +30,7 @@ export class CreateProductDto {
   @IsNotEmpty()
   description: string;
 
-  // image and images are handled by Multer FileInterceptor
+  // image and images are handled by Multer (multipart/form-data fields)
 
   @Type(() => Number)
   @IsNumber()
