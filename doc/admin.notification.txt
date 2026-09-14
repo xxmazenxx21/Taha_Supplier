@@ -1,0 +1,81 @@
+# Admin Dashboard Notification API
+
+## Authentication
+
+All requests require:
+
+```http
+Authorization: Bearer <admin-token>
+```
+
+Only users with the `ADMIN` role can send broadcasts.
+
+## Send a broadcast notification
+
+```http
+POST /notification/broadcast
+Content-Type: application/json
+Authorization: Bearer <admin-token>
+```
+
+Request body:
+
+```json
+{
+  "title": "Ramadan offers",
+  "body": "Special Ramadan prices are now available."
+}
+```
+
+`title` is required. `body` is optional, so this is also valid:
+
+```json
+{
+  "title": "Ramadan offers"
+}
+```
+
+The backend sends the notification to every registered `UserDevice` token.
+If a user has three devices, all three devices receive the broadcast.
+Notifications are sent in Firebase batches of up to 500 devices and are not
+stored in the database.
+
+Success response:
+
+```json
+{
+  "message": "Success",
+  "data": {
+    "requested": 120,
+    "sent": 118,
+    "failed": 2
+  }
+}
+```
+
+Firebase delivery failures do not make the endpoint fail. The response reports
+the number of successful and failed device deliveries.
+
+## Automatic order-status notifications
+
+When the admin calls:
+
+```http
+PATCH /order/:id
+```
+
+the backend updates the order first, then sends a notification to every device
+registered to that order's user.
+
+Example notification:
+
+```text
+Title: Order status updated
+Body: Your order #42 is now SHIPPED.
+Data:
+  type: ORDER_STATUS_UPDATED
+  order_id: 42
+  status: SHIPPED
+```
+
+The order update is not rolled back if Firebase delivery fails.

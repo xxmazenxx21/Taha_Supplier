@@ -1,0 +1,214 @@
+# Admin Product Module Documentation
+
+## Base URL
+All endpoints are relative to the application's base URL (e.g. `http://localhost:3000`).
+
+## Global Rules
+- **Authentication:** All requests must include a valid Bearer token for a user with the `ADMIN` role.
+- **Response Format:** All responses are intercepted and wrapped in a standard format:
+  ```json
+  {
+    "message": "Success", // or error message
+    "data": <actual_response_data>
+  }
+  ```
+
+---
+
+### 1. Create a Product
+**Endpoint:** `POST /product`
+**Roles:** `ADMIN`
+**Content-Type:** `multipart/form-data`
+
+**Request Body (FormData):**
+- `subcategory_id` (number, required): ID of the subcategory.
+- `brand_id` (number, required): ID of the brand.
+- `name` (string, required, min length 2): Name of the product.
+- `description` (string, required): Product description.
+- `price` (number, required, min 0): Original price of the product.
+- `discount_price` (number, optional, min 1): Discounted price. Must be strictly less than `price`.
+- `unit` (string, required): Measurement unit (e.g., 'kg', 'pcs').
+- `is_available` (boolean string 'true'/'false', optional): Availability status. Default is `true`.
+- `is_best_seller` (boolean string 'true'/'false', optional): Mark as best seller. Default is `false`.
+- `is_new` (boolean string 'true'/'false', optional): Mark as new. Default is `false`.
+- `display_order` (number, optional): Custom ordering.
+- `image` (file, required): Main product image.
+- `images` (array of files, optional, max 10): Additional gallery images.
+
+**Example Request (FormData):**
+```text
+subcategory_id: 1
+brand_id: 2
+name: "Samsung Galaxy S24"
+description: "Latest smartphone"
+price: 999.99
+discount_price: 899.99
+unit: "pcs"
+image: [binary file]
+images: [binary file 1], [binary file 2]
+```
+
+**Success Response (201 Created):**
+```json
+{
+  "message": "Success",
+  "data": {
+    "id": 1,
+    "subcategory_id": 1,
+    "brand_id": 2,
+    "name": "Samsung Galaxy S24",
+    "description": "Latest smartphone",
+    "image": "/uploads/products/xyz.jpg",
+    "price": 999.99,
+    "discount_price": 899.99,
+    "discount_percentage": 10,
+    "rating": 0,
+    "review_count": 0,
+    "is_best_seller": false,
+    "is_new": false,
+    "unit": "pcs",
+    "is_available": true,
+    "display_order": 0,
+    "created_at": "2026-09-19T00:00:00.000Z",
+    "updated_at": "2026-09-19T00:00:00.000Z",
+    "images": [
+      {
+        "id": 1,
+        "product_id": 1,
+        "image_url": "/uploads/products/gallery1.jpg",
+        "display_order": 0,
+        "created_at": "2026-09-19T00:00:00.000Z"
+      }
+    ]
+  }
+}
+```
+
+**Errors:**
+- `400 Bad Request`: "Main product image is required" (If `image` is missing).
+- `400 Bad Request`: "Subcategory or brand does not exist" (Foreign key constraint failed).
+- `400 Bad Request`: "discount_price cannot be greater than or equal to price"
+- `400 Bad Request`: "Validation failed (numeric string is expected)" (If text is sent instead of numbers for IDs).
+
+---
+
+### 2. Get All Products (Admin View)
+**Endpoint:** `GET /product/admin`
+**Roles:** `ADMIN`
+
+This endpoint returns all products unfiltered, including their nested relationships, sorted by `created_at` descending. It ignores the subcategory visibility status (unlike the client view).
+
+**Success Response (200 OK):**
+```json
+{
+  "message": "Success",
+  "data": [
+    {
+      "id": 1,
+      "name": "Samsung Galaxy S24",
+      "image": "/uploads/products/xyz.jpg",
+      "price": 999.99,
+      "subCategory": {
+        "id": 1,
+        "name": "Smartphones"
+      },
+      "brand": {
+        "id": 2,
+        "name": "Samsung",
+        "logo": "/uploads/brands/samsung.jpg"
+      },
+      "images": [...]
+    }
+  ]
+}
+```
+
+---
+
+### 3. Update a Product
+**Endpoint:** `PATCH /product/:id`
+**Roles:** `ADMIN`
+**Content-Type:** `multipart/form-data`
+
+**Request Body (FormData):**
+- Can contain any of the fields from the Create DTO, all are optional.
+- `image` (file, optional): If provided, replaces the main product image and deletes the old one.
+
+**Success Response (200 OK):**
+```json
+{
+  "message": "Success",
+  "data": {
+    "id": 1,
+    "name": "Samsung Galaxy S24 Updated",
+    "price": 950.00,
+    ...
+  }
+}
+```
+
+**Errors:**
+- `404 Not Found`: "Product not found"
+- `400 Bad Request`: "Subcategory or brand does not exist"
+- `400 Bad Request`: "discount_price cannot be greater than or equal to price" (Evaluates both submitted values and existing database values).
+
+---
+
+### 4. Delete a Product (Soft Delete)
+**Endpoint:** `DELETE /product/:id`
+**Roles:** `ADMIN`
+
+Sets `is_available` to `false` for the specified product.
+
+**Success Response (200 OK):**
+```json
+{
+  "message": "Success",
+  "data": {
+    "id": 1,
+    "is_available": false,
+    ...
+  }
+}
+```
+
+**Errors:**
+- `404 Not Found`: "Product not found"
+
+---
+
+### 5. Add Gallery Images
+**Endpoint:** `POST /product/:id/images`
+**Roles:** `ADMIN`
+**Content-Type:** `multipart/form-data`
+
+**Request Body:**
+- `images` (array of files, max 10, required).
+
+**Success Response (201 Created):**
+Returns the entire product object (same structure as `GET /product/:id`) with the newly appended images.
+
+**Errors:**
+- `400 Bad Request`: "No images provided"
+- `404 Not Found`: "Product not found"
+
+---
+
+### 6. Remove a Gallery Image
+**Endpoint:** `DELETE /product/:id/images/:imageId`
+**Roles:** `ADMIN`
+
+Deletes a specific gallery image by its ID and removes the file from local storage.
+
+**Success Response (200 OK):**
+```json
+{
+  "message": "Success",
+  "data": {
+    "success": true
+  }
+}
+```
+
+**Errors:**
+- `404 Not Found`: "Product image not found"

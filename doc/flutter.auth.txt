@@ -1,0 +1,334 @@
+# Flutter Client Auth Module Documentation
+
+## Base URL
+All endpoints are relative to the application's base URL (e.g. `http://localhost:3000`).
+
+## Global Rules
+- **Response Format:** All responses are intercepted and wrapped in a standard format:
+  ```json
+  {
+    "message": "Success", // or error message
+    "data": <actual_response_data>
+  }
+  ```
+- **Authentication:** Both of these endpoints are `@Public()` and do not require a Bearer token to access.
+- The `access_token` expires after 15 minutes.
+- The `refresh_token` expires after 30 days and is rotated each time it is used.
+- Store both tokens securely. Never log or expose the refresh token.
+
+---
+
+## Auth Endpoints
+
+### 1. User Signup
+**Endpoint:** `POST /auth/signup`
+**Roles:** `Public` (Assigns `CLIENT` role to the created user)
+**Content-Type:** `application/json`
+
+Registers a new user and returns a JWT access token alongside the user details. 
+
+*Note: While `email` is marked as optional in the signup body, it is **required** to log in later. If a user signs up without an email, they will not be able to log back in.*
+
+**Request Body (JSON):**
+- `name` (string, required, min length 2): The user's full name.
+- `phone` (string, required): A valid international phone number format (e.g., `+1234567890`).
+- `password` (string, required, min length 8): User's password.
+- `email` (string, optional): A valid email address.
+- `shop_name` (string, optional, min length 2): Name of the user's shop.
+- `address` (string, optional): Physical address.
+- `latitude` (number, optional, max 7 decimals): Location latitude.
+- `longitude` (number, optional, max 7 decimals): Location longitude.
+- `fcm_token` (string, optional): Firebase Cloud Messaging device token. If
+  supplied, it is saved as a device belonging to the user.
+- `platform` (string, optional): Device platform such as `android` or `ios`.
+
+**Example Request:**
+```json
+{
+  "name": "John Doe",
+  "phone": "+201012345678",
+  "password": "securepassword123",
+  "email": "johndoe@example.com",
+  "shop_name": "John's Grocery",
+  "address": "123 Main St, City, Country",
+  "latitude": 30.0444,
+  "longitude": 31.2357,
+  "fcm_token": "firebase-device-token"
+}
+```
+
+**Success Response (201 Created):**
+```json
+{
+  "message": "Success",
+  "data": {
+    "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+    "refresh_token": "opaque-refresh-token",
+    "user": {
+      "id": 1,
+      "name": "John Doe",
+      "email": "johndoe@example.com",
+      "phone": "+201012345678",
+      "role": "CLIENT"
+    }
+  }
+}
+```
+
+**Errors:**
+- `409 Conflict`: "Email already exists"
+- `409 Conflict`: "Phone number already exists"
+- `400 Bad Request`: Validation error if phone is not in international format, password < 8 characters, or email is invalid.
+
+---
+
+### 2. User Login
+**Endpoint:** `POST /auth/login`
+**Roles:** `Public`
+**Content-Type:** `application/json`
+
+Authenticates a user using their email and password, returning a JWT access token.
+
+**Request Body (JSON):**
+- `email` (string, required): A valid email address.
+- `password` (string, required, min length 8): User's password.
+- `fcm_token` (string, optional): Current Firebase Cloud Messaging device token.
+- `platform` (string, optional): Device platform such as `android` or `ios`.
+  The token is registered as a device; other devices remain registered.
+
+**Example Request:**
+```json
+{
+  "email": "johndoe@example.com",
+  "password": "securepassword123"
+}
+```
+
+**Success Response (201 Created):**
+```json
+{
+  "message": "Success",
+  "data": {
+    "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+    "refresh_token": "opaque-refresh-token",
+    "user": {
+      "id": 1,
+      "name": "John Doe",
+      "email": "johndoe@example.com",
+      "phone": "+201012345678",
+      "role": "CLIENT"
+    }
+  }
+}
+```
+
+**Errors:**
+- `401 Unauthorized`: "Invalid email or password" (If credentials do not match or user doesn't exist).
+- `400 Bad Request`: Validation error if email format is invalid.
+
+---
+
+### 3. Refresh the access token
+
+**Endpoint:** `POST /auth/refresh`
+**Roles:** `Public`
+**Content-Type:** `application/json`
+
+Use this endpoint when the access token expires. The expired access token is
+not required; send the refresh token instead.
+
+**Request:**
+
+```http
+POST /auth/refresh
+Content-Type: application/json
+```
+
+```json
+{
+  "refresh_token": "opaque-refresh-token"
+}
+```
+
+Refresh tokens rotate. The submitted refresh token becomes invalid and the
+response contains a new access token and refresh token.
+
+**Success response:**
+
+```json
+{
+  "message": "Success",
+  "data": {
+    "access_token": "new-short-lived-access-token",
+    "refresh_token": "new-opaque-refresh-token",
+    "user": {
+      "id": 1,
+      "name": "John Doe",
+      "email": "johndoe@example.com",
+      "phone": "+201012345678",
+      "role": "CLIENT"
+    }
+  }
+}
+```
+
+**Errors:**
+- `400 Bad Request`: missing or empty `refresh_token`.
+- `401 Unauthorized`: invalid, expired, revoked, or already-used refresh token.
+
+### 4. Logout
+
+**Endpoint:** `POST /auth/logout`
+**Roles:** `Public`
+**Content-Type:** `application/json`
+
+Logout revokes the submitted refresh token. It does not require an access token,
+so it also works after the access token expires.
+
+**Request:**
+
+```http
+POST /auth/logout
+Content-Type: application/json
+```
+
+```json
+{
+  "refresh_token": "opaque-refresh-token"
+}
+```
+
+**Success response:**
+
+```json
+{
+  "message": "Success",
+  "data": {
+    "success": true
+  }
+}
+```
+
+After calling logout, delete both tokens from secure local storage. Logout
+revokes only the current session; other devices remain signed in.
+The current access JWT is stateless and may remain technically valid until its
+15-minute expiry, so the Flutter app must stop sending it immediately after
+logout.
+
+### 5. Update the current user's FCM token
+
+**Endpoint:** `PATCH /auth/fcm-token`
+**Roles:** `CLIENT`
+**Content-Type:** `application/json`
+
+Use this endpoint after login and whenever Firebase refreshes the device token.
+Each unique token is stored in the `UserDevice` table. A user can have several
+registered devices, and notifications themselves are not stored in the
+database.
+
+**Request:**
+
+```http
+PATCH /auth/fcm-token
+Authorization: Bearer <client-token>
+Content-Type: application/json
+```
+
+```json
+{
+  "fcm_token": "firebase-device-token",
+  "platform": "android"
+}
+```
+
+**Success response:**
+
+```json
+{
+  "message": "Success",
+  "data": {
+    "success": true
+  }
+}
+```
+
+**Errors:**
+- `401 Unauthorized`: missing or invalid token.
+- `403 Forbidden`: token does not contain the `CLIENT` role.
+- `400 Bad Request`: missing or empty `fcm_token`.
+
+## Flutter token storage and automatic refresh
+
+Store `access_token` and `refresh_token` in secure storage. Send only the
+access token with normal protected API requests.
+
+When a protected request returns `401`, call the refresh endpoint once, replace
+both locally stored tokens, and retry the original request. If refresh also
+returns `401`, clear the session and send the user to login.
+
+Example refresh helper:
+
+```dart
+import 'dart:convert';
+import 'package:http/http.dart' as http;
+
+Future<bool> refreshSession({
+  required String baseUrl,
+  required String refreshToken,
+  required Future<void> Function(String accessToken, String refreshToken)
+      saveTokens,
+}) async {
+  final response = await http.post(
+    Uri.parse('$baseUrl/auth/refresh'),
+    headers: {'Content-Type': 'application/json'},
+    body: jsonEncode({'refresh_token': refreshToken}),
+  );
+
+  if (response.statusCode != 200) {
+    return false;
+  }
+
+  final body = jsonDecode(response.body) as Map<String, dynamic>;
+  final data = body['data'] as Map<String, dynamic>;
+  await saveTokens(
+    data['access_token'] as String,
+    data['refresh_token'] as String,
+  );
+  return true;
+}
+```
+
+Do not call refresh repeatedly in parallel for the same session. Because the
+backend rotates refresh tokens, only the first request using an old refresh
+token succeeds.
+
+Example logout helper:
+
+```dart
+Future<void> logout({
+  required String baseUrl,
+  required String refreshToken,
+  required Future<void> Function() clearLocalSession,
+}) async {
+  try {
+    await http.post(
+      Uri.parse('$baseUrl/auth/logout'),
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({'refresh_token': refreshToken}),
+    );
+  } finally {
+    // Always clear local tokens, even if the network is unavailable.
+    await clearLocalSession();
+  }
+}
+```
+
+## Authentication flow summary
+
+1. Call `POST /auth/signup` or `POST /auth/login`.
+2. Save both returned tokens securely.
+3. Use `access_token` for API requests.
+4. Register the FCM token with `PATCH /auth/fcm-token`.
+5. When the access token expires, call `POST /auth/refresh`.
+6. Replace both stored tokens because refresh-token rotation is enabled.
+7. On logout, call `POST /auth/logout` and clear both local tokens.

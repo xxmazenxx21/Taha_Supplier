@@ -1,0 +1,119 @@
+# Flutter Client Shipping Zone Module Documentation
+
+## Base URL
+All endpoints are relative to the application's base URL, for example:
+`http://localhost:3000`
+
+## Global Rules
+- Authentication: Client requests must include a valid Bearer token.
+- Response Format:
+  ```json
+  {
+    "message": "Success",
+    "data": [ ... ]
+  }
+  ```
+- This route returns only active shipping zones.
+- The list is sorted by `display_order` ascending.
+
+---
+
+## Get Active Shipping Zones
+**Endpoint:** `GET /shipping-zone`
+**Roles:** `CLIENT`
+
+Returns all shipping zones where `is_active` is `true`.
+This is the main method used by the Flutter app when showing delivery options during checkout or order placement.
+
+### Example Request
+```http
+GET /shipping-zone
+Authorization: Bearer <token>
+```
+
+### Success Response (200 OK)
+```json
+{
+  "message": "Success",
+  "data": [
+    {
+      "id": 1,
+      "name": "المنصورة",
+      "shipping_cost": "25.00",
+      "display_order": 1
+    },
+    {
+      "id": 2,
+      "name": "القاهرة",
+      "shipping_cost": "35.00",
+      "display_order": 2
+    }
+  ]
+}
+```
+
+### Response Fields
+- `id`: Shipping zone ID
+- `name`: Zone name, such as city or region
+- `shipping_cost`: Shipping cost for this zone
+- `display_order`: Sorting order used in the frontend list
+
+### Notes
+- Only active zones are returned.
+- Inactive zones are excluded from this list.
+- This endpoint is designed for client-side checkout selection.
+
+### Possible Errors
+- `401 Unauthorized`: Missing or invalid token
+- `403 Forbidden`: User does not have the `CLIENT` role
+- `500 Internal Server Error`: Database/server issue
+
+---
+
+## Flutter Usage Example
+```dart
+Future<List<Map<String, dynamic>>> getActiveShippingZones() async {
+  final token = await getToken();
+
+  final response = await http.get(
+    Uri.parse('$baseUrl/shipping-zone'),
+    headers: {
+      'Authorization': 'Bearer $token',
+      'Content-Type': 'application/json',
+    },
+  );
+
+  if (response.statusCode == 200) {
+    final data = jsonDecode(response.body);
+    return List<Map<String, dynamic>>.from(data['data']);
+  }
+
+  throw Exception('Failed to load shipping zones');
+}
+```
+
+## Example UI Model
+```dart
+class ShippingZone {
+  final int id;
+  final String name;
+  final double shippingCost;
+  final int displayOrder;
+
+  ShippingZone({
+    required this.id,
+    required this.name,
+    required this.shippingCost,
+    required this.displayOrder,
+  });
+
+  factory ShippingZone.fromJson(Map<String, dynamic> json) {
+    return ShippingZone(
+      id: json['id'],
+      name: json['name'],
+      shippingCost: double.parse(json['shipping_cost'].toString()),
+      displayOrder: json['display_order'] ?? 0,
+    );
+  }
+}
+```

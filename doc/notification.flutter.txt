@@ -1,0 +1,501 @@
+# Flutter Notifications API and Firebase Guide
+
+This document describes the complete Flutter flow for Firebase Cloud
+Messaging (FCM) in this backend.
+
+## What the backend supports
+
+- Each user can register multiple devices.
+- Each unique FCM token is stored as a `UserDevice` belonging to a user.
+- A device can include a platform value such as `android` or `ios`.
+- Order-created notifications are sent to every device belonging to the user.
+- Admin order-status changes are sent to every device belonging to that order's
+  user.
+- Admin broadcast notifications are sent to every registered device.
+- Notification records are not saved in a notification table.
+- There is no notification-history or `GET /notification` endpoint currently.
+
+The Flutter application only sends and receives FCM tokens. It does not call
+the admin broadcast endpoint.
+
+## Base URL and authentication
+
+```text
+http://localhost:3000
+```
+
+After client authentication, protected requests use:
+
+```http
+Authorization: Bearer <client-token>
+```
+
+The global successful response format is:
+
+```json
+{
+  "message": "Success",
+  "data": {}
+}
+```
+
+## Flutter dependencies
+
+Add Firebase Core and Firebase Messaging:
+
+```bash
+flutter pub add firebase_core firebase_messaging
+```
+
+If the app needs to display a notification banner while it is in the
+foreground, add a local notification package as well. FCM delivers the
+foreground message to Dart, but the operating system does not automatically
+show a system notification in every foreground case.
+
+## Firebase app initialization
+
+Configure the Flutter app with Firebase (normally using FlutterFire CLI), then
+initialize Firebase before using `FirebaseMessaging`:
+
+```dart
+import 'package:firebase_core/firebase_core.dart';
+import 'package:flutter/widgets.dart';
+
+import 'firebase_options.dart';
+
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await Firebase.initializeApp(
+    options: DefaultFirebaseOptions.currentPlatform,
+  );
+
+  runApp(const MyApp());
+}
+```
+
+The Firebase project used by Flutter must correspond to the Firebase project
+configured on the NestJS server through its Firebase Admin credentials.
+
+## Request notification permission
+
+Request permission before retrieving or using the token, especially on iOS and
+Android 13+:
+
+```dart
+import 'package:firebase_messaging/firebase_messaging.dart';
+
+Future<void> requestNotificationPermission() async {
+  final messaging = FirebaseMessaging.instance;
+
+  await messaging.requestPermission(
+    alert: true,
+    badge: true,
+    sound: true,
+    provisional: false,
+  );
+}
+```
+
+The exact platform setup is also required:
+
+- Android: add the Firebase Android configuration and request runtime
+  notification permission on Android 13+.
+- iOS: add the Firebase iOS configuration, enable Push Notifications, and
+  configure the APNs capability in Xcode.
+- Web: configure the Firebase web app and VAPID key if web notifications are
+  needed. The backend token endpoint remains the same.
+
+## Device token registration
+
+The backend accepts the device token in three ways:
+
+1. Optional `fcm_token` and `platform` during `POST /auth/signup`.
+2. Optional `fcm_token` and `platform` during `POST /auth/login`.
+3. `PATCH /auth/fcm-token` after the user is authenticated.
+
+The recommended approach is to call `PATCH /auth/fcm-token` after login and
+whenever Firebase reports a token refresh.
+
+### Get the current FCM token
+
+```dart
+Future<String?> getFcmToken() async {
+  return FirebaseMessaging.instance.getToken();
+}
+```
+
+### Register the current device
+
+```dart
+import 'dart:convert';
+import 'dart:io';
+
+import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:http/http.dart' as http;
+
+Future<void> registerCurrentDevice({
+  required String baseUrl,
+  required String accessToken,
+}) async {
+  final token = await FirebaseMessaging.instance.getToken();
+  if (token == null || token.isEmpty) {
+    return;
+  }
+
+  final platform = Platform.isAndroid
+      ? 'android'
+      : Platform.isIOS
+          ? 'ios'
+          : null;
+
+  final response = await http.patch(
+    Uri.parse('$baseUrl/auth/fcm-token'),
+    headers: {
+      'Authorization': 'Bearer $accessToken',
+      'Content-Type': 'application/json',
+    },
+    body: jsonEncode({
+      'fcm_token': token,
+      if (platform != null) 'platform': platform,
+    }),
+  );
+
+  if (response.statusCode != 200) {
+    throw Exception('Could not register notification device');
+  }
+}
+```
+
+Request:
+
+```http
+PATCH /auth/fcm-token
+Authorization: Bearer <client-token>
+Content-Type: application/json
+```
+
+```json
+{
+  "fcm_token": "firebase-device-token",
+  "platform": "android"
+}
+```
+
+Success response:
+
+```json
+{
+  "message": "Success",
+  "data": {
+    "success": true
+  }
+}
+```
+
+### Register during login or signup
+
+The token may also be included in the public auth requests:
+
+```json
+{
+  "email": "client@example.com",
+  "password": "password123",
+  "fcm_token": "firebase-device-token",
+  "platform": "ios"
+}
+```
+
+This is optional. The same token should still be registered again after a
+Firebase token refresh.
+
+## Multiple devices behavior
+
+Each device has its own FCM token. For example, one user may have:
+
+```text
+User 7
+ ├── Android phone token
+ ├── iPhone token
+ └── Android tablet token
+```
+
+The backend behavior is:
+
+- A new token creates a new `UserDevice` record.
+- Registering the same token again updates its `user_id` and optional platform.
+- A token is unique globally.
+- When a user places an order, all of that user's unique tokens are targeted.
+- When an admin changes an order status, all devices of that order's user are
+  targeted.
+- Broadcasts target all registered device tokens.
+
+## Token refresh handling
+
+FCM tokens can change. Register every new token with the backend:
+
+```dart
+void listenForTokenRefresh({
+  required String baseUrl,
+  required String accessToken,
+}) {
+  FirebaseMessaging.instance.onTokenRefresh.listen((newToken) async {
+    // Send newToken to PATCH /auth/fcm-token.
+    await registerTokenValue(
+      baseUrl: baseUrl,
+      accessToken: accessToken,
+      token: newToken,
+    );
+  });
+}
+
+Future<void> registerTokenValue({
+  required String baseUrl,
+  required String accessToken,
+  required String token,
+}) async {
+  final response = await http.patch(
+    Uri.parse('$baseUrl/auth/fcm-token'),
+    headers: {
+      'Authorization': 'Bearer $accessToken',
+      'Content-Type': 'application/json',
+    },
+    body: jsonEncode({
+      'fcm_token': token,
+      'platform': Platform.isAndroid ? 'android' : 'ios',
+    }),
+  );
+
+  if (response.statusCode != 200) {
+    throw Exception('Could not update FCM token');
+  }
+}
+```
+
+Call the listener only after the user has a valid authenticated token. If the
+JWT expires, authenticate again before registering the refreshed FCM token.
+
+## Order-created notification
+
+The client does not send an FCM token in `POST /order`. The device must first
+be registered through `PATCH /auth/fcm-token`.
+
+After the order transaction succeeds, the backend sends this notification to
+all registered devices for the user:
+
+```text
+Title: Order created
+Body: Your order #42 was created successfully.
+```
+
+Data payload:
+
+```json
+{
+  "type": "ORDER_CREATED",
+  "order_id": "42",
+  "status": "PENDING"
+}
+```
+
+The order remains successful if Firebase is unavailable or one or more device
+deliveries fail.
+
+## Order-status notification
+
+When an Admin updates an order using:
+
+```http
+PATCH /order/:id
+```
+
+the backend sends the notification to every registered device of that order's
+user.
+
+Example:
+
+```text
+Title: Order status updated
+Body: Your order #42 is now SHIPPED.
+```
+
+Data payload:
+
+```json
+{
+  "type": "ORDER_STATUS_UPDATED",
+  "order_id": "42",
+  "status": "SHIPPED"
+}
+```
+
+Possible status values:
+
+```text
+PENDING
+CONFIRMED
+PROCESSING
+SHIPPED
+DELIVERED
+CANCELLED
+CLIENTCANCELLED
+```
+
+The Flutter app should refresh the order details after receiving this event;
+the push payload is an event, not the complete order object.
+
+## Admin broadcast notification
+
+Flutter does not call the broadcast endpoint. The Admin dashboard calls:
+
+```http
+POST /notification/broadcast
+Authorization: Bearer <admin-token>
+Content-Type: application/json
+```
+
+Example request:
+
+```json
+{
+  "title": "Ramadan offers",
+  "body": "Special Ramadan prices are now available."
+}
+```
+
+The Flutter app receives:
+
+```json
+{
+  "type": "BROADCAST"
+}
+```
+
+The notification title and body come from the Admin request. Use the
+`BROADCAST` type to decide whether to open a promotions screen when the user
+taps the notification.
+
+## Receive foreground messages
+
+```dart
+void listenForForegroundMessages() {
+  FirebaseMessaging.onMessage.listen((RemoteMessage message) {
+    final type = message.data['type'];
+    final title = message.notification?.title;
+    final body = message.notification?.body;
+
+    switch (type) {
+      case 'ORDER_CREATED':
+        // Update local UI and optionally show a local notification.
+        break;
+      case 'ORDER_STATUS_UPDATED':
+        // Refresh the order identified by message.data['order_id'].
+        break;
+      case 'BROADCAST':
+        // Optionally open or refresh promotions.
+        break;
+    }
+
+    print('Notification: $title - $body');
+  });
+}
+```
+
+For foreground display, connect `onMessage` to the app's local notification
+implementation. Do not assume that FCM automatically displays a foreground
+notification.
+
+## Receive background messages
+
+Register a top-level background handler before `runApp`:
+
+```dart
+@pragma('vm:entry-point')
+Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
+  await Firebase.initializeApp(
+    options: DefaultFirebaseOptions.currentPlatform,
+  );
+
+  // Keep background work short. Read message.data and update local storage if
+  // needed; fetch full order details when the app opens.
+}
+
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await Firebase.initializeApp(
+    options: DefaultFirebaseOptions.currentPlatform,
+  );
+
+  FirebaseMessaging.onBackgroundMessage(firebaseMessagingBackgroundHandler);
+  runApp(const MyApp());
+}
+```
+
+## Handle notification taps
+
+Handle both a notification that opened a terminated app and a notification
+that was tapped while the app was in the background:
+
+```dart
+Future<void> configureNotificationTapHandling() async {
+  final initialMessage =
+      await FirebaseMessaging.instance.getInitialMessage();
+  if (initialMessage != null) {
+    handleNotificationTap(initialMessage);
+  }
+
+  FirebaseMessaging.onMessageOpenedApp.listen(handleNotificationTap);
+}
+
+void handleNotificationTap(RemoteMessage message) {
+  final type = message.data['type'];
+
+  switch (type) {
+    case 'ORDER_CREATED':
+    case 'ORDER_STATUS_UPDATED':
+      final orderId = int.tryParse(message.data['order_id'] ?? '');
+      if (orderId != null) {
+        // Navigate to the order details screen for orderId.
+      }
+      break;
+    case 'BROADCAST':
+      // Navigate to promotions or the home screen.
+      break;
+  }
+}
+```
+
+## Logout and token ownership
+
+There is currently no `DELETE /auth/fcm-token` endpoint. When a user logs out,
+the app should stop using the authenticated API token and register the device
+again after the next user logs in. Registering the same FCM token for another
+user moves that token to the new user because FCM tokens are unique.
+
+Do not send notifications from Flutter directly using Firebase Admin
+credentials. Firebase Admin credentials remain on the backend only.
+
+## Error handling
+
+For `PATCH /auth/fcm-token`:
+
+- `400`: missing or empty `fcm_token`, invalid `platform`, or unknown fields.
+- `401`: missing, expired, or invalid JWT.
+- `403`: JWT does not contain the `CLIENT` role.
+
+For push delivery:
+
+- A missing Firebase token means no push is sent.
+- An invalid or expired device token may fail delivery.
+- Push delivery failure does not fail order creation or order status updates.
+- The broadcast response reports `requested`, `sent`, and `failed` device counts.
+
+## Recommended startup sequence
+
+1. Initialize Firebase.
+2. Request notification permission.
+3. Get the current FCM token.
+4. Login or signup the client.
+5. Call `PATCH /auth/fcm-token` with the token and platform.
+6. Subscribe to `onTokenRefresh`.
+7. Register foreground, background, and notification-tap handlers.
+8. Refresh order details when an order event is received.

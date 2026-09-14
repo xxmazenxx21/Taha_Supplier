@@ -1,0 +1,196 @@
+# Admin Coupon Module Documentation
+
+## Base URL
+All endpoints are relative to the application's base URL (e.g. `http://localhost:3000`).
+
+## Global Rules
+- **Authentication:** All requests must include a valid Bearer token for a user with the `ADMIN` role.
+- **Response Format:** All responses are intercepted and wrapped in a standard format:
+  ```json
+  {
+    "message": "Success", // or error message
+    "data": <actual_response_data>
+  }
+  ```
+
+---
+
+### 1. Create a Coupon
+**Endpoint:** `POST /coupon`
+**Roles:** `ADMIN`
+**Content-Type:** `application/json`
+
+**Request Body (JSON):**
+- `code` (string, required): Unique coupon code.
+- `discount_value` (number, required): Percentage discount (1–100).
+- `min_order_amount` (number, optional): Minimum order total to apply coupon.
+- `start_date` (ISO date string, optional): When coupon becomes active.
+- `end_date` (ISO date string, optional): When coupon expires.
+- `usage_limit` (integer, optional): Max number of times the coupon can be used.
+- `status` (enum string, optional): `ACTIVE` or `PAUSED`.
+
+**Example Request (JSON):**
+```json
+{
+  "code": "WELCOME10",
+  "discount_value": 10,
+  "min_order_amount": 50,
+  "start_date": "2026-09-01T00:00:00.000Z",
+  "end_date": "2026-12-31T23:59:59.000Z",
+  "usage_limit": 100,
+  "status": "ACTIVE"
+}
+```
+
+**Success Response (201 Created):**
+```json
+{
+  "message": "Success",
+  "data": {
+    "id": 1,
+    "code": "WELCOME10",
+    "discount_value": 10,
+    "min_order_amount": 50,
+    "start_date": "2026-09-01T00:00:00.000Z",
+    "end_date": "2026-12-31T23:59:59.000Z",
+    "usage_limit": 100,
+    "status": "ACTIVE",
+    "created_at": "2026-09-19T00:00:00.000Z",
+    "updated_at": "2026-09-19T00:00:00.000Z"
+  }
+}
+```
+
+**Errors:**
+- `400 Bad Request`: "code is required" (If `code` is missing).
+- `400 Bad Request`: "discount_value must be between 1 and 100".
+- `400 Bad Request`: "Validation failed" (For malformed or invalid fields).
+- `400 Bad Request`: "Coupon code already exists" (If uniqueness constraint fails).
+
+---
+
+### 2. Get All Coupons (Admin View)
+**Endpoint:** `GET /coupon`
+**Roles:** `ADMIN`
+
+Returns all coupons with no filters, sorted by `created_at` descending.
+
+**Success Response (200 OK):**
+```json
+{
+  "message": "Success",
+  "data": [
+    {
+      "id": 1,
+      "code": "WELCOME10",
+      "discount_value": 10,
+      "min_order_amount": 50,
+      "start_date": "2026-09-01T00:00:00.000Z",
+      "end_date": "2026-12-31T23:59:59.000Z",
+      "usage_limit": 100,
+      "status": "ACTIVE",
+      "created_at": "2026-09-19T00:00:00.000Z",
+      "updated_at": "2026-09-19T00:00:00.000Z"
+    }
+  ]
+}
+```
+
+---
+
+### 3. Get Single Coupon (Admin View)
+**Endpoint:** `GET /coupon/:id`
+**Roles:** `ADMIN`
+
+**Success Response (200 OK):**
+```json
+{
+  "message": "Success",
+  "data": {
+    "id": 1,
+    "code": "WELCOME10",
+    "discount_value": 10,
+    "min_order_amount": 50,
+    "start_date": "2026-09-01T00:00:00.000Z",
+    "end_date": "2026-12-31T23:59:59.000Z",
+    "usage_limit": 100,
+    "status": "ACTIVE",
+    "created_at": "2026-09-19T00:00:00.000Z",
+    "updated_at": "2026-09-19T00:00:00.000Z"
+  }
+}
+```
+
+**Errors:**
+- `404 Not Found`: "Coupon not found".
+
+---
+
+### 4. Update a Coupon
+**Endpoint:** `PATCH /coupon/:id`
+**Roles:** `ADMIN`
+**Content-Type:** `application/json`
+
+All fields from the create DTO are optional; only provided fields will be updated.
+
+**Example Request (JSON):**
+```json
+{
+  "discount_value": 15,
+  "status": "PAUSED"
+}
+```
+
+**Success Response (200 OK):**
+```json
+{
+  "message": "Success",
+  "data": {
+    "id": 1,
+    "code": "WELCOME10",
+    "discount_value": 15,
+    "min_order_amount": 50,
+    "start_date": "2026-09-01T00:00:00.000Z",
+    "end_date": "2026-12-31T23:59:59.000Z",
+    "usage_limit": 100,
+    "status": "PAUSED",
+    "created_at": "2026-09-19T00:00:00.000Z",
+    "updated_at": "2026-09-19T00:00:00.000Z"
+  }
+}
+```
+
+**Errors:**
+- `404 Not Found`: "Coupon not found".
+- `400 Bad Request`: "discount_value must be between 1 and 100".
+- `400 Bad Request`: "Validation failed".
+
+---
+
+### 5. Delete a Coupon (Hard Delete)
+**Endpoint:** `DELETE /coupon/:id`
+**Roles:** `ADMIN`
+
+Permanently removes the coupon from the system.
+
+**Success Response (200 OK):**
+```json
+{
+  "message": "Success",
+  "data": {
+    "success": true
+  }
+}
+```
+
+**Errors:**
+- `404 Not Found`: "Coupon not found".
+
+---
+
+### Notes for Frontend
+- Always send `Authorization: Bearer <token>` header for admin operations.
+- `discount_value` is treated as a percentage; calculate applied discount accordingly on the frontend.
+- Date fields use ISO 8601 strings and server timezone should be considered when displaying dates.
+- For client-facing coupon listing/validation endpoints (if added later), expect additional filters such as active-only, validity checks against `start_date`/`end_date`, and remaining `usage_limit` enforcement.
+p

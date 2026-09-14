@@ -1,0 +1,253 @@
+# Admin Dashboard Order API Documentation
+
+## Base URL
+
+All endpoints are relative to the application base URL, for example:
+`http://localhost:3000`
+
+## Global Rules
+
+- Every request requires `Authorization: Bearer <admin-token>`.
+- The authenticated user must have the `ADMIN` role.
+- Responses use the global wrapper:
+
+```json
+{
+  "message": "Success",
+  "data": {}
+}
+```
+
+- Monetary response values are rounded numbers in EGP.
+- The client password is never included in the admin order response.
+
+## Order Status Values
+
+```text
+PENDING
+CONFIRMED
+PROCESSING
+SHIPPED
+DELIVERED
+CANCELLED          // cancelled by admin
+CLIENTCANCELLED   // cancelled by client
+```
+
+## 1. Get All Orders
+
+**Endpoint:** `GET /order/admin`
+
+Returns every order, including active, cancelled, and client-cancelled orders. Results are sorted by `created_at` descending and have no filters or pagination.
+
+### Example Request
+
+```http
+GET /order/admin
+Authorization: Bearer <admin-token>
+```
+
+### Success Response — 200 OK
+
+```json
+{
+  "message": "Success",
+  "data": [
+    {
+      "id": 42,
+      "user_id": 7,
+      "coupon_id": null,
+      "shipping_zone_id": 1,
+      "status": "PENDING",
+      "payment_method": "CASH",
+      "payment_status": "PENDING",
+      "payment_proof_image": null,
+      "subtotal": 500,
+      "discount_amount": 50,
+      "shipping_fee": 25,
+      "total_amount": 475,
+      "delivery_address": "Mansoura, El-Gomhoria Street",
+      "delivery_lat": 31.0409,
+      "delivery_lng": 31.3785,
+      "delivery_notes": "Call before delivery",
+      "created_at": "2026-09-21T10:00:00.000Z",
+      "updated_at": "2026-09-21T10:00:00.000Z",
+      "delivered_at": null,
+      "items": [
+        {
+          "id": 101,
+          "order_id": 42,
+          "product_id": 5,
+          "quantity": 2,
+          "unit_price": 250,
+          "total_price": 500,
+          "product_name": "Premium Coffee",
+          "product_unit": "1 kg"
+        }
+      ],
+      "shippingZone": {
+        "id": 1,
+        "name": "Mansoura",
+        "shipping_cost": 25,
+        "is_active": true,
+        "display_order": 1,
+        "created_at": "2026-09-19T10:00:00.000Z",
+        "updated_at": "2026-09-19T10:00:00.000Z"
+      },
+      "user": {
+        "id": 7,
+        "name": "Ahmed Ali",
+        "shop_name": "Ahmed Cafe",
+        "phone": "01000000000",
+        "email": "ahmed@example.com",
+        "address": "Mansoura"
+      }
+    }
+  ]
+}
+```
+
+## 2. Get Cancelled Orders
+
+**Endpoint:** `GET /order/admin/cancelled`
+
+Returns orders whose status is either `CANCELLED` or `CLIENTCANCELLED`. Results are sorted by `created_at` descending.
+
+### Example Request
+
+```http
+GET /order/admin/cancelled
+Authorization: Bearer <admin-token>
+```
+
+### Success Response — 200 OK
+
+```json
+{
+  "message": "Success",
+  "data": [
+    {
+      "id": 43,
+      "user_id": 7,
+      "coupon_id": 2,
+      "shipping_zone_id": 1,
+      "status": "CLIENTCANCELLED",
+      "payment_method": "CARD",
+      "payment_status": "PENDING",
+      "payment_proof_image": "/uploads/payment-proofs/receipt-43.jpg",
+      "subtotal": 500,
+      "discount_amount": 0,
+      "shipping_fee": 25,
+      "total_amount": 525,
+      "delivery_address": "Mansoura",
+      "delivery_lat": null,
+      "delivery_lng": null,
+      "delivery_notes": null,
+      "created_at": "2026-09-20T10:00:00.000Z",
+      "updated_at": "2026-09-20T12:00:00.000Z",
+      "delivered_at": null,
+      "items": [],
+      "shippingZone": {
+        "id": 1,
+        "name": "Mansoura",
+        "shipping_cost": 25,
+        "is_active": true,
+        "display_order": 1,
+        "created_at": "2026-09-19T10:00:00.000Z",
+        "updated_at": "2026-09-19T10:00:00.000Z"
+      },
+      "user": {
+        "id": 7,
+        "name": "Ahmed Ali",
+        "shop_name": "Ahmed Cafe",
+        "phone": "01000000000",
+        "email": "ahmed@example.com",
+        "address": "Mansoura"
+      }
+    }
+  ]
+}
+```
+
+## 3. Update an Order Status
+
+**Endpoint:** `PATCH /order/:id`
+
+Updates the status of any existing order. This endpoint is for the admin dashboard.
+
+### Example Request
+
+```http
+PATCH /order/42
+Authorization: Bearer <admin-token>
+Content-Type: application/json
+```
+
+```json
+{
+  "status": "CONFIRMED"
+}
+```
+
+### Success Response — 200 OK
+
+The response returns the updated order using the same order shape as `GET /order/admin`, including `items`, `shippingZone`, and the safe `user` object.
+
+After the database update, the backend sends an `ORDER_STATUS_UPDATED` push
+notification to every registered device belonging to this order's user. Push
+delivery failures do not roll back the status update.
+
+```json
+{
+  "message": "Success",
+  "data": {
+    "id": 42,
+    "user_id": 7,
+    "shipping_zone_id": 1,
+    "status": "CONFIRMED",
+    "payment_method": "CASH",
+    "payment_status": "PENDING",
+    "subtotal": 500,
+    "discount_amount": 50,
+    "shipping_fee": 25,
+    "total_amount": 475,
+    "delivery_address": "Mansoura, El-Gomhoria Street",
+    "items": [],
+    "shippingZone": {},
+    "user": {}
+  }
+}
+```
+
+### Errors
+
+- `400 Bad Request`: invalid order ID or invalid status.
+- `401 Unauthorized`: missing or invalid token.
+- `403 Forbidden`: authenticated user is not an admin.
+- `404 Not Found`: `Order not found`.
+
+### Admin Dashboard Example
+
+```dart
+Future<Map<String, dynamic>> updateOrderStatus(
+  int orderId,
+  String status,
+) async {
+  final token = await getAdminToken();
+
+  final response = await http.patch(
+    Uri.parse('$baseUrl/order/$orderId'),
+    headers: {
+      'Authorization': 'Bearer $token',
+      'Content-Type': 'application/json',
+    },
+    body: jsonEncode({'status': status}),
+  );
+
+  if (response.statusCode == 200) {
+    final body = jsonDecode(response.body) as Map<String, dynamic>;
+    return Map<String, dynamic>.from(body['data']);
+  }
+
+  throw Exception('Failed to update order status');
+}
+```
