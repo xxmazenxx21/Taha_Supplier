@@ -1,10 +1,18 @@
 // Product categories, such as coffee, chocolate, cups, and machines.
 
 model Category {
-  id            Int       @id @default(autoincrement())
+  id            Int    @id @default(autoincrement())
   name          String
-  display_order Int       @default(0)
-  is_hidden     Boolean   @default(false)
-  created_at    DateTime  @default(now())
-  products      Product[]
+  display_order Int    @default(0)
+
+  image     String?
+  parent_id Int?
+
+  parent   Category?  @relation("CategoryHierarchy", fields: [parent_id], references: [id])
+  children Category[] @relation("CategoryHierarchy")
+
+  is_hidden       Boolean         @default(false)
+  created_at      DateTime        @default(now())
+  products        Product[]
+  brandCategories BrandCategory[]
 }

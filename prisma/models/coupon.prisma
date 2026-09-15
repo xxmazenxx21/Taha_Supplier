@@ -1,0 +1,37 @@
+enum DiscountType {
+  PERCENTAGE
+  FIXED
+}
+
+enum CouponStatus {
+  ACTIVE
+  PAUSED
+}
+
+model Coupon {
+  id               Int           @id @default(autoincrement())
+  code             String        @unique
+  discount_type    DiscountType
+  discount_value   Decimal       @db.Decimal(10, 2)
+  min_order_amount Decimal?      @db.Decimal(10, 2)
+  start_date       DateTime?
+  end_date         DateTime?
+  usage_limit      Int?
+  usage_count      Int           @default(0)
+  status           CouponStatus  @default(ACTIVE)
+  created_at       DateTime      @default(now())
+  couponUsages     CouponUsage[]
+}
+
+model CouponUsage {
+  id        Int      @id @default(autoincrement())
+  coupon_id Int
+  user_id   Int
+  order_id  Int?
+  used_at   DateTime @default(now())
+
+  coupon Coupon @relation(fields: [coupon_id], references: [id])
+  user   User   @relation(fields: [user_id], references: [id])
+
+  @@unique([coupon_id, user_id])
+}

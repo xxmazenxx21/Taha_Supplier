@@ -23,6 +23,7 @@ import {
 import { BrandService } from './brand.service';
 import { CreateBrandDto } from './dto/create-brand.dto';
 import { UpdateBrandDto } from './dto/update-brand.dto';
+import { ManageCategoriesDto } from './dto/manage-categories.dto';
 
 @Controller('brand')
 export class BrandController {
@@ -91,5 +92,17 @@ export class BrandController {
   @Roles(UserRole.ADMIN)
   remove(@Param('id') id: string) {
     return this.brandService.remove(+id);
+  }
+
+  @Post(':id/categories')
+  @Roles(UserRole.ADMIN)
+  addCategories(@Param('id') id: string, @Body() dto: ManageCategoriesDto) {
+    return this.brandService.addCategories(+id, dto.category_ids);
+  }
+
+  @Delete(':id/categories/:categoryId')
+  @Roles(UserRole.ADMIN)
+  removeCategory(@Param('id') id: string, @Param('categoryId') categoryId: string) {
+    return this.brandService.removeCategory(+id, +categoryId);
   }
 }

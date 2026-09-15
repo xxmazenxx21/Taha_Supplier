@@ -9,12 +9,20 @@
 * 🟢 You can import this file directly.
 */
 
-export const ProductStatus = {
-  AVAILABLE: 'AVAILABLE',
-  UNAVAILABLE: 'UNAVAILABLE'
+export const DiscountType = {
+  PERCENTAGE: 'PERCENTAGE',
+  FIXED: 'FIXED'
 } as const
 
-export type ProductStatus = (typeof ProductStatus)[keyof typeof ProductStatus]
+export type DiscountType = (typeof DiscountType)[keyof typeof DiscountType]
+
+
+export const CouponStatus = {
+  ACTIVE: 'ACTIVE',
+  PAUSED: 'PAUSED'
+} as const
+
+export type CouponStatus = (typeof CouponStatus)[keyof typeof CouponStatus]
 
 
 export const UserRole = {

@@ -29,4 +29,7 @@ model User {
   block_reason String?
   created_at   DateTime   @default(now())
   updated_at   DateTime   @updatedAt
+
+  cart         Cart?
+  couponUsages CouponUsage[]
 }

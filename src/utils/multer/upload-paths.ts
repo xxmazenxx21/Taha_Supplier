@@ -2,6 +2,7 @@ import { resolve } from 'node:path';
 
 export enum UploadFolder {
   BRANDS = 'brands',
+  CATEGORIES = 'categories',
   PRODUCTS = 'products',
 }
 

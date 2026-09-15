@@ -7,6 +7,7 @@ import {
   Param,
   Patch,
   Post,
+  Query,
   UploadedFile,
   UploadedFiles,
   UseInterceptors,
@@ -18,6 +19,7 @@ import { multerOptions, validateImageFiles } from '../utils/multer/multer';
 import { UploadFolder, getUploadPublicPath } from '../utils/multer/upload-paths';
 import { CreateProductDto } from './dto/create-product.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
+import { FindAllProductsDto } from './dto/find-all-products.dto';
 import { ProductService } from './product.service';
 
 const productFileFields = [
@@ -58,13 +60,26 @@ export class ProductController {
   }
 
   @Get()
-  findAll() {
-    return this.productService.findAll();
+  findAll(@Query() query: FindAllProductsDto) {
+    return this.productService.findAll(query);
+  }
+
+  @Get('search')
+  searchProducts(@Query('q') q: string) {
+    if (!q || q.length < 2) {
+      throw new BadRequestException('Search query must be at least 2 characters long');
+    }
+    return this.productService.search(q);
   }
 
   @Get(':id')
   findOne(@Param('id') id: string) {
     return this.productService.findOne(+id);
+  }
+
+  @Get(':id/reviews')
+  getReviews(@Param('id') id: string) {
+    return this.productService.getReviews(+id);
   }
 
   @Patch(':id')

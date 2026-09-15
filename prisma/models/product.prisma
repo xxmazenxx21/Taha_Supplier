@@ -1,26 +1,28 @@
-enum ProductStatus {
-  AVAILABLE
-  UNAVAILABLE
-}
-
 model Product {
-  id             Int           @id @default(autoincrement())
-  category_id    Int
-  brand_id       Int
-  name           String
-  description    String        @db.Text
-  image          String
-  price          Decimal       @db.Decimal(10, 2)
-  discount_price Decimal?      @db.Decimal(10, 2)
-  unit           String
-  status         ProductStatus @default(AVAILABLE)
-  display_order  Int           @default(0)
-  created_at     DateTime      @default(now())
-  updated_at     DateTime      @updatedAt
+  id                  Int      @id @default(autoincrement())
+  category_id         Int
+  brand_id            Int
+  name                String
+  description         String   @db.Text
+  image               String
+  price               Decimal  @db.Decimal(10, 2)
+  discount_price      Decimal? @db.Decimal(10, 2)
+  discount_percentage Decimal? @db.Decimal(5, 2)
+  rating              Decimal  @default(0) @db.Decimal(3, 2)
+  review_count        Int      @default(0)
+  is_best_seller      Boolean  @default(false)
+  is_new              Boolean  @default(false)
+  unit                String
+  is_available        Boolean  @default(true)
+  display_order       Int      @default(0)
+  created_at          DateTime @default(now())
+  updated_at          DateTime @updatedAt
 
-  category Category       @relation(fields: [category_id], references: [id])
-  brand    Brand          @relation(fields: [brand_id], references: [id])
-  images   ProductImage[]
+  category   Category       @relation(fields: [category_id], references: [id])
+  brand      Brand          @relation(fields: [brand_id], references: [id])
+  images     ProductImage[]
+  cart_items CartItem[]
+  reviews    Review[]
 }
 
 model ProductImage {

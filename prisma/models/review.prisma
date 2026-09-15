@@ -1,0 +1,10 @@
+model Review {
+  id          Int      @id @default(autoincrement())
+  product_id  Int
+  author_name String
+  rating      Int
+  comment     String?  @db.Text
+  created_at  DateTime @default(now())
+
+  product Product @relation(fields: [product_id], references: [id], onDelete: Cascade)
+}

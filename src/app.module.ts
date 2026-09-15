@@ -11,6 +11,8 @@ import { AuthModule } from './auth/auth.module';
 import { CategoryModule } from './category/category.module';
 import { BrandModule } from './brand/brand.module';
 import { ProductModule } from './product/product.module';
+import { CartModule } from './cart/cart.module';
+import { CouponModule } from './coupon/coupon.module';
 
 @Module({
   imports: [
@@ -29,6 +31,8 @@ import { ProductModule } from './product/product.module';
     CategoryModule,
     BrandModule,
     ProductModule,
+    CartModule,
+    CouponModule,
   ],
   controllers: [AppController],
   providers: [

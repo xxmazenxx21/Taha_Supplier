@@ -1,6 +1,6 @@
-import { Type } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 import {
-  IsEnum,
+  IsBoolean,
   IsInt,
   IsNotEmpty,
   IsNumber,
@@ -9,7 +9,6 @@ import {
   Min,
   MinLength,
 } from 'class-validator';
-import { ProductStatus } from '../../../generated/prisma/enums';
 
 export class CreateProductDto {
   @Type(() => Number)
@@ -48,8 +47,31 @@ export class CreateProductDto {
   unit: string;
 
   @IsOptional()
-  @IsEnum(ProductStatus)
-  status?: ProductStatus;
+  @Transform(({ value }) => {
+    if (value === 'true') return true;
+    if (value === 'false') return false;
+    return value;
+  })
+  @IsBoolean()
+  is_available?: boolean;
+
+  @IsOptional()
+  @Transform(({ value }) => {
+    if (value === 'true') return true;
+    if (value === 'false') return false;
+    return value;
+  })
+  @IsBoolean()
+  is_best_seller?: boolean;
+
+  @IsOptional()
+  @Transform(({ value }) => {
+    if (value === 'true') return true;
+    if (value === 'false') return false;
+    return value;
+  })
+  @IsBoolean()
+  is_new?: boolean;
 
   @IsOptional()
   @Type(() => Number)

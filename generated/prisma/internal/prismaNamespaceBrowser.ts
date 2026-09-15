@@ -52,9 +52,15 @@ export const AnyNull = runtime.AnyNull
 
 export const ModelName = {
   Brand: 'Brand',
+  BrandCategory: 'BrandCategory',
+  Cart: 'Cart',
+  CartItem: 'CartItem',
   Category: 'Category',
+  Coupon: 'Coupon',
+  CouponUsage: 'CouponUsage',
   Product: 'Product',
   ProductImage: 'ProductImage',
+  Review: 'Review',
   User: 'User'
 } as const
 
@@ -86,15 +92,76 @@ export const BrandScalarFieldEnum = {
 export type BrandScalarFieldEnum = (typeof BrandScalarFieldEnum)[keyof typeof BrandScalarFieldEnum]
 
 
+export const BrandCategoryScalarFieldEnum = {
+  id: 'id',
+  brand_id: 'brand_id',
+  category_id: 'category_id'
+} as const
+
+export type BrandCategoryScalarFieldEnum = (typeof BrandCategoryScalarFieldEnum)[keyof typeof BrandCategoryScalarFieldEnum]
+
+
+export const CartScalarFieldEnum = {
+  id: 'id',
+  user_id: 'user_id',
+  created_at: 'created_at',
+  updated_at: 'updated_at'
+} as const
+
+export type CartScalarFieldEnum = (typeof CartScalarFieldEnum)[keyof typeof CartScalarFieldEnum]
+
+
+export const CartItemScalarFieldEnum = {
+  id: 'id',
+  cart_id: 'cart_id',
+  product_id: 'product_id',
+  quantity: 'quantity',
+  created_at: 'created_at',
+  updated_at: 'updated_at'
+} as const
+
+export type CartItemScalarFieldEnum = (typeof CartItemScalarFieldEnum)[keyof typeof CartItemScalarFieldEnum]
+
+
 export const CategoryScalarFieldEnum = {
   id: 'id',
   name: 'name',
   display_order: 'display_order',
+  image: 'image',
+  parent_id: 'parent_id',
   is_hidden: 'is_hidden',
   created_at: 'created_at'
 } as const
 
 export type CategoryScalarFieldEnum = (typeof CategoryScalarFieldEnum)[keyof typeof CategoryScalarFieldEnum]
+
+
+export const CouponScalarFieldEnum = {
+  id: 'id',
+  code: 'code',
+  discount_type: 'discount_type',
+  discount_value: 'discount_value',
+  min_order_amount: 'min_order_amount',
+  start_date: 'start_date',
+  end_date: 'end_date',
+  usage_limit: 'usage_limit',
+  usage_count: 'usage_count',
+  status: 'status',
+  created_at: 'created_at'
+} as const
+
+export type CouponScalarFieldEnum = (typeof CouponScalarFieldEnum)[keyof typeof CouponScalarFieldEnum]
+
+
+export const CouponUsageScalarFieldEnum = {
+  id: 'id',
+  coupon_id: 'coupon_id',
+  user_id: 'user_id',
+  order_id: 'order_id',
+  used_at: 'used_at'
+} as const
+
+export type CouponUsageScalarFieldEnum = (typeof CouponUsageScalarFieldEnum)[keyof typeof CouponUsageScalarFieldEnum]
 
 
 export const ProductScalarFieldEnum = {
@@ -106,8 +173,13 @@ export const ProductScalarFieldEnum = {
   image: 'image',
   price: 'price',
   discount_price: 'discount_price',
+  discount_percentage: 'discount_percentage',
+  rating: 'rating',
+  review_count: 'review_count',
+  is_best_seller: 'is_best_seller',
+  is_new: 'is_new',
   unit: 'unit',
-  status: 'status',
+  is_available: 'is_available',
   display_order: 'display_order',
   created_at: 'created_at',
   updated_at: 'updated_at'
@@ -125,6 +197,18 @@ export const ProductImageScalarFieldEnum = {
 } as const
 
 export type ProductImageScalarFieldEnum = (typeof ProductImageScalarFieldEnum)[keyof typeof ProductImageScalarFieldEnum]
+
+
+export const ReviewScalarFieldEnum = {
+  id: 'id',
+  product_id: 'product_id',
+  author_name: 'author_name',
+  rating: 'rating',
+  comment: 'comment',
+  created_at: 'created_at'
+} as const
+
+export type ReviewScalarFieldEnum = (typeof ReviewScalarFieldEnum)[keyof typeof ReviewScalarFieldEnum]
 
 
 export const UserScalarFieldEnum = {

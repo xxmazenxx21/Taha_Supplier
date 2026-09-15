@@ -22,6 +22,12 @@ export class CreateCategoryDto {
   display_order?: number;
 
   @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  parent_id?: number;
+
+  @IsOptional()
   @Transform(({ value }) => {
     if (value === 'true') return true;
     if (value === 'false') return false;
