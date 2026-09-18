@@ -1,14 +1,14 @@
-FRONTEND DOCUMENTATION - ADMIN DASHBOARD CATEGORY MODULE
+FRONTEND DOCUMENTATION - ADMIN DASHBOARD SUBCATEGORY MODULE
 
 Base URL
 - http://localhost:3000
 
 Scope
-This document covers only the admin-dashboard category controllers in the backend.
-Relevant controller: src/category/category.controller.ts
+This document covers the admin-dashboard subcategory endpoints in the backend.
+Relevant controller: src/sub-category/sub-category.controller.ts
 
 Important note
-The admin category endpoints are protected with the ADMIN role guard.
+The admin subcategory endpoints are protected with the ADMIN role guard.
 Use this header on every admin request:
 Authorization: Bearer <admin_token>
 
@@ -100,18 +100,43 @@ Response:
   "statusCode": 400
 }
 
-8) Category not found on update
+8) Sub category not found on update
 Response:
 {
-  "message": "Category not found",
+  "message": "Sub category not found",
   "error": "Not Found",
   "statusCode": 404
 }
 
 ADMIN ENDPOINTS
 
-1) GET /category
-Purpose: Get all categories for admin dashboard.
+1) GET /sub-category
+Purpose: Get all visible subcategories for the public frontend.
+Access: public route
+Method: GET
+
+Success response example:
+{
+  "message": "Success",
+  "data": [
+    {
+      "id": 11,
+      "name": "Phones",
+      "image": "http://localhost:3000/uploads/sub-category/abc123.png",
+      "display_order": 1,
+      "category_id": 1,
+      "is_hidden": false,
+      "created_at": "2026-09-18T10:00:00.000Z"
+    }
+  ]
+}
+
+Possible errors:
+- 400 if validation issues exist in query params (not usually used here)
+- 500 if database query fails
+
+2) GET /sub-category/admin
+Purpose: Get all subcategories for admin dashboard, including hidden ones.
 Access: ADMIN only
 Method: GET
 
@@ -123,31 +148,22 @@ Success response example:
   "message": "Success",
   "data": [
     {
-      "id": 1,
-      "name": "Electronics",
-      "image": "http://localhost:3000/uploads/categories/abc123.png",
+      "id": 11,
+      "name": "Phones",
+      "image": "http://localhost:3000/uploads/sub-category/abc123.png",
       "display_order": 1,
+      "category_id": 1,
       "is_hidden": false,
-      "created_at": "2026-09-18T10:00:00.000Z",
-      "updated_at": "2026-09-18T10:00:00.000Z",
-      "subcategories": [
-        {
-          "id": 11,
-          "name": "Phones",
-          "category_id": 1,
-          "is_hidden": false
-        }
-      ]
+      "created_at": "2026-09-18T10:00:00.000Z"
     },
     {
-      "id": 2,
-      "name": "Home",
-      "image": "http://localhost:3000/uploads/categories/xyz456.png",
+      "id": 12,
+      "name": "Laptops",
+      "image": "http://localhost:3000/uploads/sub-category/def456.png",
       "display_order": 2,
+      "category_id": 1,
       "is_hidden": true,
-      "created_at": "2026-09-18T11:00:00.000Z",
-      "updated_at": "2026-09-18T11:00:00.000Z",
-      "subcategories": []
+      "created_at": "2026-09-18T11:00:00.000Z"
     }
   ]
 }
@@ -156,17 +172,15 @@ Possible errors:
 - 401 Unauthorized
 - 403 Forbidden
 
-Note:
-This admin route is intended to return all categories, including hidden ones. The public route also uses GET /category but is not an admin-dashboard route.
-
-2) POST /category
-Purpose: Create a new category from the admin dashboard.
+3) POST /sub-category
+Purpose: Create a new subcategory.
 Access: ADMIN only
 Method: POST
 Content-Type: multipart/form-data
 
 Request example (FormData):
-name: "Electronics"
+name: "Phones"
+category_id: 1
 display_order: 1
 is_hidden: false
 image: <image file>
@@ -176,6 +190,7 @@ Authorization: Bearer <admin_token>
 
 Request DTO rules:
 - name: string, required, min length 2
+- category_id: integer, required, min 1
 - display_order: optional integer, min 0
 - is_hidden: optional boolean, accepted as true/false in multipart form
 - image: optional file upload, if provided must be valid image
@@ -184,13 +199,13 @@ Success response example:
 {
   "message": "Success",
   "data": {
-    "id": 1,
-    "name": "Electronics",
-    "image": "http://localhost:3000/uploads/categories/abc123.png",
+    "id": 11,
+    "name": "Phones",
+    "image": "http://localhost:3000/uploads/sub-category/abc123.png",
     "display_order": 1,
+    "category_id": 1,
     "is_hidden": false,
-    "created_at": "2026-09-18T10:00:00.000Z",
-    "updated_at": "2026-09-18T10:00:00.000Z"
+    "created_at": "2026-09-18T10:00:00.000Z"
   }
 }
 
@@ -198,38 +213,30 @@ Possible errors:
 - 401 Unauthorized
 - 403 Forbidden
 - 400 Bad Request if name is too short
+- 400 Bad Request if category_id is invalid or missing
 - 400 Bad Request if display_order is negative or not an integer
 - 400 Bad Request if is_hidden is not a boolean value
-- 400 Bad Request if no file is uploaded and the code expects one
-- 400 Bad Request if image file exceeds 5MB
+- 400 Bad Request if uploaded file exceeds 5MB
 - 400 Bad Request if image mime type is invalid
 - 400 Bad Request if file field name is not image
 
-Example validation error:
-{
-  "message": [
-    "name must be longer than or equal to 2 characters"
-  ],
-  "error": "Bad Request",
-  "statusCode": 400
-}
-
-3) PATCH /category/:id
-Purpose: Update a category.
+4) PATCH /sub-category/:id
+Purpose: Update an existing subcategory.
 Access: ADMIN only
 Method: PATCH
 Content-Type: multipart/form-data
 
 Request example (FormData):
-name: "Home Appliances"
-display_order: 3
+name: "Smart Phones"
+category_id: 1
+display_order: 2
 is_hidden: false
 image: <new image file>
 
 Headers:
 Authorization: Bearer <admin_token>
 
-Optional fields: name, display_order, is_hidden, image
+Optional fields: name, category_id, display_order, is_hidden, image
 
 Important behavior:
 When a new image is uploaded, the previous image file is deleted from the server, but the database row is still updated normally.
@@ -238,10 +245,11 @@ Success response example:
 {
   "message": "Success",
   "data": {
-    "id": 1,
-    "name": "Home Appliances",
-    "image": "http://localhost:3000/uploads/categories/new-image.png",
-    "display_order": 3,
+    "id": 11,
+    "name": "Smart Phones",
+    "image": "http://localhost:3000/uploads/sub-category/new-image.png",
+    "display_order": 2,
+    "category_id": 1,
     "is_hidden": false,
     "created_at": "2026-09-18T10:00:00.000Z",
     "updated_at": "2026-09-19T09:15:00.000Z"
@@ -255,18 +263,18 @@ Possible errors:
 - 400 Bad Request if image file is too large
 - 400 Bad Request if image type is invalid
 - 400 Bad Request if file field is not image
-- 404 Not Found if category ID does not exist
-- 500 Internal Server Error for invalid numeric ID or DB update issues
+- 404 Not Found if subcategory ID does not exist
+- 500 Internal Server Error if DB update fails
 
 Example 404 response:
 {
-  "message": "Category not found",
+  "message": "Sub category not found",
   "error": "Not Found",
   "statusCode": 404
 }
 
-4) DELETE /category/:id
-Purpose: Hide a category from the public list instead of deleting it permanently.
+5) DELETE /sub-category/:id
+Purpose: Hide a subcategory from the public list instead of deleting it permanently.
 Access: ADMIN only
 Method: DELETE
 
@@ -274,16 +282,17 @@ Headers:
 Authorization: Bearer <admin_token>
 
 Example request:
-DELETE /category/1
+DELETE /sub-category/11
 
 Success response example:
 {
   "message": "Success",
   "data": {
-    "id": 1,
-    "name": "Electronics",
-    "image": "http://localhost:3000/uploads/categories/abc123.png",
+    "id": 11,
+    "name": "Phones",
+    "image": "http://localhost:3000/uploads/sub-category/abc123.png",
     "display_order": 1,
+    "category_id": 1,
     "is_hidden": true,
     "created_at": "2026-09-18T10:00:00.000Z",
     "updated_at": "2026-09-18T12:30:00.000Z"
@@ -302,38 +311,40 @@ Frontend usage checklist
 - Always send Authorization header with a valid admin JWT.
 - Use multipart/form-data for create and update when sending an image.
 - Field name for the uploaded image must be image.
-- For delete, pass only the category ID in the URL.
-- Expect 400 for validation issues, 401 for authentication, 403 for authorization, and 404 for missing category on update.
+- For delete, pass only the subcategory ID in the URL.
+- Expect 400 for validation issues, 401 for authentication, 403 for authorization, and 404 for missing subcategory on update.
 
-Example: create category with admin token (curl)
-curl -X POST http://localhost:3000/category \
+Example: create subcategory with admin token (curl)
+curl -X POST http://localhost:3000/sub-category \
   -H "Authorization: Bearer <admin_token>" \
-  -F "name=Electronics" \
+  -F "name=Phones" \
+  -F "category_id=1" \
   -F "display_order=1" \
   -F "is_hidden=false" \
-  -F "image=@/path/to/category.png"
+  -F "image=@/path/to/subcategory.png"
 
-Example: update category (curl)
-curl -X PATCH http://localhost:3000/category/1 \
+Example: update subcategory (curl)
+curl -X PATCH http://localhost:3000/sub-category/11 \
   -H "Authorization: Bearer <admin_token>" \
-  -F "name=Home Appliances" \
+  -F "name=Smart Phones" \
   -F "display_order=2" \
   -F "is_hidden=false" \
-  -F "image=@/path/to/new-category.png"
+  -F "image=@/path/to/new-subcategory.png"
 
-Example: delete category (curl)
-curl -X DELETE http://localhost:3000/category/1 \
+Example: delete subcategory (curl)
+curl -X DELETE http://localhost:3000/sub-category/11 \
   -H "Authorization: Bearer <admin_token>"
 
-Example: list categories for dashboard (curl)
-curl -X GET http://localhost:3000/category \
+Example: list admin subcategories (curl)
+curl -X GET http://localhost:3000/sub-category/admin \
   -H "Authorization: Bearer <admin_token>"
 
 Summary
-The admin dashboard category module is built around four main actions:
-- GET /category -> list categories (admin view)
-- POST /category -> create category
-- PATCH /category/:id -> update category
-- DELETE /category/:id -> hide category
+The admin dashboard subcategory module is built around five main actions:
+- GET /sub-category -> public visible list
+- GET /sub-category/admin -> admin list including hidden items
+- POST /sub-category -> create subcategory
+- PATCH /sub-category/:id -> update subcategory and remove old image
+- DELETE /sub-category/:id -> hide subcategory
 
-All of them require ADMIN role and follow the same backend validation behavior for errors and uploads.
+All admin routes require ADMIN role and follow the same backend validation behavior for errors and uploads.

@@ -1,12 +1,16 @@
 import { Transform, Type } from 'class-transformer';
-import { IsBoolean, IsInt, IsOptional, IsString, Min, MinLength } from 'class-validator';
+import { IsBoolean, IsInt, IsNotEmpty, IsOptional, IsString, Min, MinLength } from 'class-validator';
 
-export class CreateCategoryDto {
+export class CreateSubCategoryDto {
   @IsString()
   @MinLength(2)
+  @IsNotEmpty()
   name: string;
 
-  // Image is deliberately omitted: it is always derived from the uploaded file.
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  category_id: number;
 
   @IsOptional()
   @Type(() => Number)

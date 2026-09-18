@@ -5,14 +5,9 @@ model Category {
   name          String
   display_order Int    @default(0)
 
-  image     String?
-  parent_id Int?
+  image String?
 
-  parent   Category?  @relation("CategoryHierarchy", fields: [parent_id], references: [id])
-  children Category[] @relation("CategoryHierarchy")
-
-  is_hidden       Boolean         @default(false)
-  created_at      DateTime        @default(now())
-  products        Product[]
-  brandCategories BrandCategory[]
+  is_hidden      Boolean       @default(false)
+  created_at     DateTime      @default(now())
+  subcategories  SubCategory[]
 }

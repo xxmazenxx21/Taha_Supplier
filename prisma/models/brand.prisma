@@ -1,23 +1,12 @@
 // Product brands, such as coffee or machine manufacturers.
 
 model Brand {
-  id              Int             @id @default(autoincrement())
-  name            String          @unique
-  logo            String
-  created_at      DateTime        @default(now())
-  updated_at      DateTime        @updatedAt
-  deleted_at      DateTime?
-  products        Product[]
-  brandCategories BrandCategory[]
-}
-
-model BrandCategory {
-  id          Int @id @default(autoincrement())
-  brand_id    Int
-  category_id Int
-
-  brand    Brand    @relation(fields: [brand_id], references: [id])
-  category Category @relation(fields: [category_id], references: [id])
-
-  @@unique([brand_id, category_id])
+  id                 Int                @id @default(autoincrement())
+  name               String             @unique
+  logo               String
+  created_at         DateTime           @default(now())
+  updated_at         DateTime           @updatedAt
+  deleted_at         DateTime?
+  products           Product[]
+  brandSubCategories BrandSubCategory[]
 }

@@ -1,0 +1,29 @@
+// Sub-categories that belong to a parent Category.
+// Each subcategory can have many products and many brands.
+
+model SubCategory {
+  id            Int    @id @default(autoincrement())
+  name          String
+  display_order Int    @default(0)
+
+  image       String?
+  category_id Int
+
+  is_hidden  Boolean  @default(false)
+  created_at DateTime @default(now())
+
+  category           Category             @relation(fields: [category_id], references: [id])
+  products           Product[]
+  brandSubCategories BrandSubCategory[]
+}
+
+model BrandSubCategory {
+  id              Int @id @default(autoincrement())
+  brand_id        Int
+  subcategory_id  Int
+
+  brand       Brand       @relation(fields: [brand_id], references: [id])
+  subCategory SubCategory @relation(fields: [subcategory_id], references: [id])
+
+  @@unique([brand_id, subcategory_id])
+}

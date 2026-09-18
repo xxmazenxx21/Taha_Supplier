@@ -1,0 +1,472 @@
+FLUTTER FRONTEND DOCUMENTATION
+Category + Subcategory + Brand
+
+Base URL
+- http://localhost:3000
+
+This document is for Flutter app usage.
+It covers the GET endpoints that are relevant for the app flow, and explains the navigation pattern we plan to use.
+
+AUTH + ROLE RULES
+The app user role is:
+- CLIENT
+
+This means the Flutter app should authenticate as a user with role CLIENT when using the storefront flow.
+
+The system roles in the Prisma model are:
+- CLIENT
+- ADMIN
+- DELIVERY
+- ORDERS_STAFF
+- ACCOUNTS_STAFF
+- SUPPORT
+
+Important auth rules:
+- Public category / subcategory / brand endpoints do not require an auth token.
+- If the app later adds protected routes, the token must be sent as:
+  Authorization: Bearer <token>
+- The app should expect 401 Unauthorized when the token is missing or invalid.
+- The app should expect 403 Forbidden when the user does not have the required role.
+
+IMPORTANT: RESPONSE SHAPE
+All successful responses are wrapped by the global interceptor.
+So every success response looks like:
+{
+  "message": "Success",
+  "data": { ...actual payload... }
+}
+
+Examples:
+{
+  "message": "Success",
+  "data": [
+    {
+      "id": 1,
+      "name": "Electronics"
+    }
+  ]
+}
+
+Errors still use the Nest default format:
+{
+  "message": "Something went wrong",
+  "error": "Bad Request",
+  "statusCode": 400
+}
+
+1) CATEGORY GETS
+
+A) GET /category
+Purpose:
+- Load the main category list for the home screen.
+- Use this for the first page of the app.
+
+Access:
+- Public route
+- No auth required
+
+Example request:
+GET /category
+
+Example success response:
+{
+  "message": "Success",
+  "data": [
+    {
+      "id": 1,
+      "name": "Electronics",
+      "image": "http://localhost:3000/uploads/categories/electronics.png",
+      "display_order": 1,
+      "is_hidden": false,
+      "created_at": "2026-09-18T10:00:00.000Z",
+      "updated_at": "2026-09-18T10:00:00.000Z",
+      "subcategories": [
+        {
+          "id": 11,
+          "name": "Phones",
+          "category_id": 1,
+          "display_order": 1,
+          "is_hidden": false,
+          "created_at": "2026-09-18T10:00:00.000Z"
+        },
+        {
+          "id": 12,
+          "name": "Laptops",
+          "category_id": 1,
+          "display_order": 2,
+          "is_hidden": false,
+          "created_at": "2026-09-18T10:00:00.000Z"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "name": "Home",
+      "image": "http://localhost:3000/uploads/categories/home.png",
+      "display_order": 2,
+      "is_hidden": false,
+      "created_at": "2026-09-18T10:00:00.000Z",
+      "updated_at": "2026-09-18T10:00:00.000Z",
+      "subcategories": []
+    }
+  ]
+}
+
+Flutter usage:
+- This is the main list for the home category cards.
+- Each category item includes its subcategories array already.
+
+B) GET /category/:id
+Purpose:
+- Get one category with all nested subcategories.
+- Use this when user taps a category and you want the full detail screen.
+
+Access:
+- Public route
+- No auth required
+
+Example request:
+GET /category/1
+
+Example success response:
+{
+  "message": "Success",
+  "data": {
+    "id": 1,
+    "name": "Electronics",
+    "image": "http://localhost:3000/uploads/categories/electronics.png",
+    "display_order": 1,
+    "is_hidden": false,
+    "created_at": "2026-09-18T10:00:00.000Z",
+    "updated_at": "2026-09-18T10:00:00.000Z",
+    "subcategories": [
+      {
+        "id": 11,
+        "name": "Phones",
+        "category_id": 1,
+        "display_order": 1,
+        "is_hidden": false,
+        "created_at": "2026-09-18T10:00:00.000Z"
+      },
+      {
+        "id": 12,
+        "name": "Laptops",
+        "category_id": 1,
+        "display_order": 2,
+        "is_hidden": false,
+        "created_at": "2026-09-18T10:00:00.000Z"
+      }
+    ]
+  }
+}
+
+Possible error:
+{
+  "message": "Category not found",
+  "error": "Not Found",
+  "statusCode": 404
+}
+
+Flutter usage:
+- Best choice after user taps a category card
+- You can show the subcategory list directly from category.subcategories
+
+2) SUBCATEGORY GETS
+
+A) GET /sub-category
+Purpose:
+- Get all visible subcategories.
+- This is the public list for the storefront.
+
+Access:
+- Public route
+- No auth required
+
+Example request:
+GET /sub-category
+
+Example success response:
+{
+  "message": "Success",
+  "data": [
+    {
+      "id": 11,
+      "name": "Phones",
+      "image": "http://localhost:3000/uploads/sub-category/phones.png",
+      "display_order": 1,
+      "category_id": 1,
+      "is_hidden": false,
+      "created_at": "2026-09-18T10:00:00.000Z"
+    },
+    {
+      "id": 12,
+      "name": "Laptops",
+      "image": "http://localhost:3000/uploads/sub-category/laptops.png",
+      "display_order": 2,
+      "category_id": 1,
+      "is_hidden": false,
+      "created_at": "2026-09-18T10:00:00.000Z"
+    }
+  ]
+}
+
+Flutter usage:
+- Can be used if you want a full global subcategory list.
+- But in the app flow we prefer category detail first because the category already contains its subcategories.
+
+B) GET /sub-category/:id
+Purpose:
+- Get one subcategory by id.
+- Useful when you tap a subcategory card and need its details.
+
+Access:
+- Public route
+- No auth required
+
+Example request:
+GET /sub-category/11
+
+Example success response:
+{
+  "message": "Success",
+  "data": {
+    "id": 11,
+    "name": "Phones",
+    "image": "http://localhost:3000/uploads/sub-category/phones.png",
+    "display_order": 1,
+    "category_id": 1,
+    "is_hidden": false,
+    "created_at": "2026-09-18T10:00:00.000Z"
+  }
+}
+
+Possible error:
+{
+  "message": "Sub category not found",
+  "error": "Not Found",
+  "statusCode": 404
+}
+
+Flutter usage:
+- Good for a detail screen.
+- Not the main route for the home flow because category detail already provides the list.
+
+3) BRAND GETS
+
+A) GET /brand
+Purpose:
+- Load all active brands for the app.
+- This is the main list used when the user chooses a subcategory.
+
+Access:
+- Public route
+- No auth required
+
+Example request:
+GET /brand
+
+Example success response:
+{
+  "message": "Success",
+  "data": [
+    {
+      "id": 1,
+      "name": "Nike",
+      "logo": "http://localhost:3000/uploads/brands/nike-logo.png",
+      "created_at": "2026-09-18T10:00:00.000Z",
+      "updated_at": "2026-09-18T10:30:00.000Z",
+      "brandSubCategories": [
+        {
+          "subCategory": {
+            "id": 11,
+            "name": "Phones"
+          }
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "name": "Apple",
+      "logo": "http://localhost:3000/uploads/brands/apple-logo.png",
+      "created_at": "2026-09-18T10:00:00.000Z",
+      "updated_at": "2026-09-18T10:30:00.000Z",
+      "brandSubCategories": [
+        {
+          "subCategory": {
+            "id": 11,
+            "name": "Phones"
+          }
+        },
+        {
+          "subCategory": {
+            "id": 12,
+            "name": "Laptops"
+          }
+        }
+      ]
+    }
+  ]
+}
+
+Flutter usage:
+- Use this route to fetch all brands.
+- Then locally filter brands by checking each brand.brandSubCategories and selecting only the brands that contain the selected subcategory id.
+
+B) GET /brand/:id
+Purpose:
+- Get one brand and its linked subcategories.
+- Use this for a brand detail or brand-specific products later.
+
+Access:
+- Public route
+- No auth required
+
+Example request:
+GET /brand/1
+
+Example success response:
+{
+  "message": "Success",
+  "data": {
+    "id": 1,
+    "name": "Nike",
+    "logo": "http://localhost:3000/uploads/brands/nike-logo.png",
+    "created_at": "2026-09-18T10:00:00.000Z",
+    "updated_at": "2026-09-18T10:30:00.000Z",
+    "brandSubCategories": [
+      {
+        "subCategory": {
+          "id": 11,
+          "name": "Phones"
+        }
+      }
+    ]
+  }
+}
+
+Possible error:
+{
+  "message": "Brand not found",
+  "error": "Not Found",
+  "statusCode": 404
+}
+
+Flutter usage:
+- Good for a brand detail page.
+- Later we can use this to show products by selected brand.
+
+IMPORTANT NOTE FOR FLUTTER FLOW
+There is no dedicated GET endpoint like:
+- /brand?subcategoryId=11
+- /subcategory?categoryId=1
+
+So for the app flow today, use this pattern:
+
+Flow 1: Home page
+- Call GET /category
+- Show category cards on the home screen
+
+Flow 2: Category selected
+- User taps a category, for example category id = 1
+- Use GET /category/1
+- Read category.subcategories
+- Show subcategory cards
+
+Flow 3: Subcategory selected
+- User taps subcategory id = 11
+- Call GET /brand
+- Filter the list in Flutter by checking each brand.brandSubCategories
+- Keep only brands where any subCategory.id equals 11
+- Show the filtered brands list
+
+Flow 4: End of current phase
+- At this point, the app has reached the brand screen for the chosen subcategory.
+- This is the final flow for the current phase.
+- When the product module is ready, we will continue the flow:
+  - selected subcategory + selected brand
+  - then call product endpoints to load products filtered for that subcategory and brand
+
+Example filter logic in Flutter (conceptually):
+final selectedSubCategoryId = 11;
+
+final filteredBrands = allBrands.where((brand) {
+  return brand.brandSubCategories.any(
+    (item) => item.subCategory?.id == selectedSubCategoryId,
+  );
+}).toList();
+
+RECOMMENDED APP FLOW
+1. Home screen
+   - GET /category
+   - display category cards
+
+2. Category detail screen
+   - GET /category/:id
+   - display subcategories
+
+3. Subcategory screen
+   - use selected subcategory id
+   - GET /brand
+   - filter by matching subCategory.id
+   - display brands
+
+4. Brand screen
+   - when ready, later fetch products for selected brand + selected subcategory
+
+CURRENTLY IMPLEMENTED FLUTTER DATA FLOW
+- Category -> subcategory is already supported by the category detail response
+- Brand relationship is supported through brand.brandSubCategories
+- Product list is not implemented yet, so we stop after brand selection for now
+
+RECOMMENDED MODELS FOR FLUTTER
+Category model:
+{
+  "id": int,
+  "name": String,
+  "image": String,
+  "display_order": int,
+  "is_hidden": bool,
+  "subcategories": List<SubCategory>
+}
+
+SubCategory model:
+{
+  "id": int,
+  "name": String,
+  "image": String,
+  "display_order": int,
+  "category_id": int,
+  "is_hidden": bool
+}
+
+Brand model:
+{
+  "id": int,
+  "name": String,
+  "logo": String,
+  "created_at": String,
+  "updated_at": String,
+  "brandSubCategories": List<BrandSubCategoryRelation>
+}
+
+BrandSubCategoryRelation model:
+{
+  "subCategory": {
+    "id": int,
+    "name": String
+  }
+}
+
+SUMMARY
+For Flutter right now, use these routes:
+- GET /category
+- GET /category/:id
+- GET /sub-category
+- GET /sub-category/:id
+- GET /brand
+- GET /brand/:id
+
+And use this navigation flow:
+Home -> Category -> Subcategory -> Brands
+
+This is the current app flow we need before the product module is ready.

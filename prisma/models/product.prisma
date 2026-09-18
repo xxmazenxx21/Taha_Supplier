@@ -1,6 +1,6 @@
 model Product {
   id                  Int      @id @default(autoincrement())
-  category_id         Int
+  subcategory_id      Int
   brand_id            Int
   name                String
   description         String   @db.Text
@@ -18,11 +18,11 @@ model Product {
   created_at          DateTime @default(now())
   updated_at          DateTime @updatedAt
 
-  category   Category       @relation(fields: [category_id], references: [id])
-  brand      Brand          @relation(fields: [brand_id], references: [id])
-  images     ProductImage[]
-  cart_items CartItem[]
-  reviews    Review[]
+  subCategory SubCategory    @relation(fields: [subcategory_id], references: [id])
+  brand       Brand          @relation(fields: [brand_id], references: [id])
+  images      ProductImage[]
+  cart_items  CartItem[]
+  reviews     Review[]
 }
 
 model ProductImage {

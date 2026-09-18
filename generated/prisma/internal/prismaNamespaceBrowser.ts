@@ -52,7 +52,6 @@ export const AnyNull = runtime.AnyNull
 
 export const ModelName = {
   Brand: 'Brand',
-  BrandCategory: 'BrandCategory',
   Cart: 'Cart',
   CartItem: 'CartItem',
   Category: 'Category',
@@ -61,6 +60,8 @@ export const ModelName = {
   Product: 'Product',
   ProductImage: 'ProductImage',
   Review: 'Review',
+  SubCategory: 'SubCategory',
+  BrandSubCategory: 'BrandSubCategory',
   User: 'User'
 } as const
 
@@ -92,15 +93,6 @@ export const BrandScalarFieldEnum = {
 export type BrandScalarFieldEnum = (typeof BrandScalarFieldEnum)[keyof typeof BrandScalarFieldEnum]
 
 
-export const BrandCategoryScalarFieldEnum = {
-  id: 'id',
-  brand_id: 'brand_id',
-  category_id: 'category_id'
-} as const
-
-export type BrandCategoryScalarFieldEnum = (typeof BrandCategoryScalarFieldEnum)[keyof typeof BrandCategoryScalarFieldEnum]
-
-
 export const CartScalarFieldEnum = {
   id: 'id',
   user_id: 'user_id',
@@ -128,7 +120,6 @@ export const CategoryScalarFieldEnum = {
   name: 'name',
   display_order: 'display_order',
   image: 'image',
-  parent_id: 'parent_id',
   is_hidden: 'is_hidden',
   created_at: 'created_at'
 } as const
@@ -166,7 +157,7 @@ export type CouponUsageScalarFieldEnum = (typeof CouponUsageScalarFieldEnum)[key
 
 export const ProductScalarFieldEnum = {
   id: 'id',
-  category_id: 'category_id',
+  subcategory_id: 'subcategory_id',
   brand_id: 'brand_id',
   name: 'name',
   description: 'description',
@@ -209,6 +200,28 @@ export const ReviewScalarFieldEnum = {
 } as const
 
 export type ReviewScalarFieldEnum = (typeof ReviewScalarFieldEnum)[keyof typeof ReviewScalarFieldEnum]
+
+
+export const SubCategoryScalarFieldEnum = {
+  id: 'id',
+  name: 'name',
+  display_order: 'display_order',
+  image: 'image',
+  category_id: 'category_id',
+  is_hidden: 'is_hidden',
+  created_at: 'created_at'
+} as const
+
+export type SubCategoryScalarFieldEnum = (typeof SubCategoryScalarFieldEnum)[keyof typeof SubCategoryScalarFieldEnum]
+
+
+export const BrandSubCategoryScalarFieldEnum = {
+  id: 'id',
+  brand_id: 'brand_id',
+  subcategory_id: 'subcategory_id'
+} as const
+
+export type BrandSubCategoryScalarFieldEnum = (typeof BrandSubCategoryScalarFieldEnum)[keyof typeof BrandSubCategoryScalarFieldEnum]
 
 
 export const UserScalarFieldEnum = {

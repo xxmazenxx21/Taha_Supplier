@@ -1,118 +1,404 @@
-BRAND API
-Base URL: http://localhost:3000
+FRONTEND DOCUMENTATION - BRAND MODULE
 
-This file contains only the implemented brand endpoints.
+Base URL
+- http://localhost:3000
 
-GENERAL RULES
-- All brand routes except public ones require a valid JWT.
-- Authorization header format: Authorization: Bearer <token>
-- Admin-only routes require user.role === ADMIN
-- Missing/invalid token => 401 Unauthorized
-- Missing role => 403 Forbidden
-  { "message": "You do not have permission (no role found)", "error": "Forbidden", "statusCode": 403 }
-- Non-admin role => 403 Forbidden
-  { "message": "You do not have the required roles to access this resource", "error": "Forbidden", "statusCode": 403 }
+Scope
+This document covers all brand API routes in the backend, including both public and admin endpoints.
+Relevant controller: src/brand/brand.controller.ts
+Relevant service: src/brand/brand.service.ts
 
-COMMON FILE RULES
-- Multipart form field name for uploads must be logo
-- Allowed mime types: image/jpeg, image/jpg, image/png, image/webp
-- Max file size: 5MB (5242880 bytes)
-
-COMMON FILE ERRORS
-- Missing file => 400 Bad Request
-  { "message": "File is required", "error": "Bad Request", "statusCode": 400 }
-- File too large => 400 Bad Request
-  { "message": "Validation failed (current file size is 5242880, expected size is less than 5242880)", "error": "Bad Request", "statusCode": 400 }
-- Wrong mime / wrong file type => 400 Bad Request
-  { "message": "Validation failed (file buffer is not available; file type validation could not be performed; expected type is /^image\\/(jpeg|jpg|png|webp)$/)", "error": "Bad Request", "statusCode": 400 }
-- Wrong field name => 400 Bad Request
-  { "message": "Unexpected field - <field name>", "error": "Bad Request", "statusCode": 400 }
-
-COMMON VALIDATION ERROR
-- DTO validation failure => 400 Bad Request
-- Example:
-  {
-    "message": ["name must be longer than or equal to 2 characters"],
-    "error": "Bad Request",
-    "statusCode": 400
-  }
-
-1) POST /brand
-Admin only
-Content-Type: multipart/form-data
-
-Request body (form-data):
-- name: string; required; min length 2
-- logo: file; required
-
-Success response:
-Created brand object from Prisma, for example:
+GLOBAL RESPONSE FORMAT
+The project uses a global response interceptor for successful responses.
+All success responses are wrapped like this:
 {
-  id: number,
-  name: string,
-  logo: string,
-  created_at: Date,
-  updated_at: Date,
-  deleted_at: Date | null
+  "message": "Success",
+  "data": { ...actual payload... }
+}
+
+If the controller returns an object with its own message field, that message is used instead of "Success".
+
+Important:
+- Successful responses are wrapped by the interceptor.
+- Error responses still use Nest default format, such as { message, error, statusCode }.
+
+GENERAL AUTH RULES
+- Public endpoints do not require a token.
+- Admin-only endpoints require:
+  Authorization: Bearer <token>
+- If token is missing, malformed, expired, or invalid: 401 Unauthorized
+- If role is missing: 403 Forbidden
+  message: "You do not have permission (no role found)"
+- If user role is not ADMIN: 403 Forbidden
+  message: "You do not have the required roles to access this resource"
+
+COMMON VALIDATION RULES
+- ValidationPipe is enabled globally with transform: true, whitelist: true, forbidNonWhitelisted: true.
+- Extra fields in DTO payloads are rejected with 400 Bad Request.
+- File uploads use multipart/form-data.
+- Brand logo field name must be logo.
+- Accepted file types: image/jpeg, image/jpg, image/png, image/webp
+- Max file size: 5MB
+
+COMMON ERROR EXAMPLES
+1) Missing token
+{
+  "message": "Unauthorized",
+  "error": "Unauthorized",
+  "statusCode": 401
+}
+
+2) No role in token
+{
+  "message": "You do not have permission (no role found)",
+  "error": "Forbidden",
+  "statusCode": 403
+}
+
+3) User role is not ADMIN
+{
+  "message": "You do not have the required roles to access this resource",
+  "error": "Forbidden",
+  "statusCode": 403
+}
+
+4) DTO validation error
+{
+  "message": [
+    "name must be longer than or equal to 2 characters"
+  ],
+  "error": "Bad Request",
+  "statusCode": 400
+}
+
+5) File too large
+{
+  "message": "Validation failed (expected size is less than 5242880)",
+  "error": "Bad Request",
+  "statusCode": 400
+}
+
+6) Invalid file type
+{
+  "message": "Validation failed (expected type is /^image\\/(jpeg|jpg|png|webp)$/)",
+  "error": "Bad Request",
+  "statusCode": 400
+}
+
+7) Duplicate brand name
+{
+  "message": "Brand with this name already exists",
+  "error": "Conflict",
+  "statusCode": 409
+}
+
+8) Brand not found
+{
+  "message": "Brand not found",
+  "error": "Not Found",
+  "statusCode": 404
+}
+
+PUBLIC ENDPOINTS
+
+1) GET /brand
+Purpose: Get all non-deleted brands for the frontend catalog.
+Access: Public
+Method: GET
+
+Success response example:
+{
+  "message": "Success",
+  "data": [
+    {
+      "id": 1,
+      "name": "Nike",
+      "logo": "http://localhost:3000/uploads/brands/nike-logo.png",
+      "created_at": "2026-09-18T10:00:00.000Z",
+      "updated_at": "2026-09-18T10:30:00.000Z",
+      "brandSubCategories": [
+        {
+          "subCategory": {
+            "id": 5,
+            "name": "Running"
+          }
+        }
+      ]
+    }
+  ]
 }
 
 Possible errors:
-- 401 Unauthorized if token missing/invalid
-- 403 Forbidden if role missing
-- 403 Forbidden if role is not ADMIN
-- 400 Bad Request if DTO validation fails
-- 400 Bad Request if logo file is missing
-- 400 Bad Request if logo size is >= 5MB
-- 400 Bad Request if logo mime type is invalid
-- 400 Bad Request if uploaded field name is not logo
-- 409 Conflict if brand name already exists
-  { "message": "Brand with this name already exists", "error": "Conflict", "statusCode": 409 }
-- 500 Internal Server Error if create fails after upload; backend tries to remove uploaded file before rethrowing
+- 500 Internal Server Error if database query fails
 
-2) PATCH /brand/:id
-Admin only
+2) GET /brand/:id
+Purpose: Get one brand by ID.
+Access: Public
+Method: GET
+
+Success response example:
+{
+  "message": "Success",
+  "data": {
+    "id": 1,
+    "name": "Nike",
+    "logo": "http://localhost:3000/uploads/brands/nike-logo.png",
+    "created_at": "2026-09-18T10:00:00.000Z",
+    "updated_at": "2026-09-18T10:30:00.000Z",
+    "brandSubCategories": [
+      {
+        "subCategory": {
+          "id": 5,
+          "name": "Running"
+        }
+      }
+    ]
+  }
+}
+
+Possible errors:
+- 404 Not Found if the brand does not exist or is soft deleted
+  {
+    "message": "Brand not found",
+    "error": "Not Found",
+    "statusCode": 404
+  }
+
+ADMIN ENDPOINTS
+
+3) GET /brand
+Purpose: Get brands for the admin dashboard, without the full relationship payload.
+Access: ADMIN only
+Method: GET
+
+Note:
+This route is defined in the controller as another GET /brand route with the admin guard. In practice, it is intended for admin dashboard use and requires an admin token.
+
+Success response example:
+{
+  "message": "Success",
+  "data": [
+    {
+      "id": 1,
+      "name": "Nike",
+      "logo": "http://localhost:3000/uploads/brands/nike-logo.png",
+      "created_at": "2026-09-18T10:00:00.000Z",
+      "updated_at": "2026-09-18T10:30:00.000Z"
+    }
+  ]
+}
+
+Possible errors:
+- 401 Unauthorized
+- 403 Forbidden
+
+4) POST /brand
+Purpose: Create a brand.
+Access: ADMIN only
+Method: POST
 Content-Type: multipart/form-data
 
-Optional form-data fields:
-- name?: string; min length 2
-- logo?: file
+Request fields:
+- name: string, required, min length 2
+- subcategory_ids: optional array of numbers
+- logo: required file, valid image type and size <= 5MB
 
-Success response:
-Updated brand object
+Example request (FormData):
+name: "Nike"
+subcategory_ids: [5, 8]
+logo: <image file>
 
-Possible errors:
-- 401 Unauthorized if token missing/invalid
-- 403 Forbidden if role missing
-- 403 Forbidden if role is not ADMIN
-- 400 Bad Request if DTO validation fails
-- 400 Bad Request if logo file size is >= 5MB
-- 400 Bad Request if logo mime type is invalid
-- 400 Bad Request if uploaded field name is not logo
-- 404 Not Found if no active brand matches the id
-  { "message": "Brand not found", "error": "Not Found", "statusCode": 404 }
-- 409 Conflict if another brand already has the same name
-  { "message": "Brand with this name already exists", "error": "Conflict", "statusCode": 409 }
-- 500 Internal Server Error if id is invalid after unchecked +id conversion
-- 500 Internal Server Error if deleting the old logo file fails for a reason other than ENOENT
-
-3) DELETE /brand/:id
-Admin only
-
-Behavior:
-- Soft delete
-- Sets deleted_at to current date
-- Does not delete the logo file
-
-Success response:
-Updated brand object with deleted_at set
+Success response example:
+{
+  "message": "Success",
+  "data": {
+    "id": 1,
+    "name": "Nike",
+    "logo": "http://localhost:3000/uploads/brands/nike-logo.png",
+    "created_at": "2026-09-18T10:00:00.000Z",
+    "updated_at": "2026-09-18T10:00:00.000Z"
+  }
+}
 
 Possible errors:
-- 401 Unauthorized if token missing/invalid
-- 403 Forbidden if role missing
-- 403 Forbidden if role is not ADMIN
-- 404 Not Found if no active brand matches the id
-  { "message": "Brand not found", "error": "Not Found", "statusCode": 404 }
-- 500 Internal Server Error if id is invalid after unchecked +id conversion
+- 401 Unauthorized
+- 403 Forbidden
+- 400 Bad Request for validation issues or invalid logo file
+- 409 Conflict if a brand with the same name already exists
+- 404 Not Found if one or more subcategory_ids do not exist
+  {
+    "message": "Subcategories not found: 999",
+    "error": "Not Found",
+    "statusCode": 404
+  }
 
-IMPORTANT NOTE
-- GET /brand and GET /brand/:id are not implemented and should not be used from the frontend.
+5) PATCH /brand/:id
+Purpose: Update brand details.
+Access: ADMIN only
+Method: PATCH
+Content-Type: multipart/form-data
+
+Allowed fields:
+- name: optional string, min length 2
+- subcategory_ids: optional array of numbers (accepted by DTO, but relationship changes are not managed here; use dedicated subcategory endpoints for relation updates)
+- logo: optional file, valid image
+
+Important behavior:
+When a new logo is uploaded successfully, the previous logo on disk is deleted.
+If the brand is missing, the newly uploaded file is also cleaned up before the 404 is thrown.
+
+Success response example:
+{
+  "message": "Success",
+  "data": {
+    "id": 1,
+    "name": "Nike updated",
+    "logo": "http://localhost:3000/uploads/brands/new-logo.png",
+    "created_at": "2026-09-18T10:00:00.000Z",
+    "updated_at": "2026-09-19T09:15:00.000Z"
+  }
+}
+
+Possible errors:
+- 401 Unauthorized
+- 403 Forbidden
+- 400 Bad Request for validation issues or invalid logo file
+- 404 Not Found if brand ID does not exist
+- 409 Conflict if a duplicate brand name is found
+
+6) DELETE /brand/:id
+Purpose: Soft delete a brand.
+Access: ADMIN only
+Method: DELETE
+
+This does not remove the row from the database. It sets deleted_at to the current time.
+
+Success response example:
+{
+  "message": "Success",
+  "data": {
+    "id": 1,
+    "name": "Nike",
+    "logo": "http://localhost:3000/uploads/brands/nike-logo.png",
+    "deleted_at": "2026-09-18T12:00:00.000Z"
+  }
+}
+
+Possible errors:
+- 401 Unauthorized
+- 403 Forbidden
+- 404 Not Found if the brand is missing or already soft deleted
+
+7) POST /brand/:id/subcategories
+Purpose: Attach multiple subcategories to a brand.
+Access: ADMIN only
+Method: POST
+Content-Type: application/json
+
+Request body:
+{
+  "subcategory_ids": [5, 8, 10]
+}
+
+Validation rules:
+- subcategory_ids is required
+- array cannot be empty
+- values must be integers and unique
+
+Success response example:
+{
+  "message": "Success",
+  "data": {
+    "id": 1,
+    "name": "Nike",
+    "logo": "http://localhost:3000/uploads/brands/nike-logo.png",
+    "brandSubCategories": [
+      {
+        "id": 20,
+        "brand_id": 1,
+        "subcategory_id": 5,
+        "subCategory": {
+          "id": 5,
+          "name": "Running"
+        }
+      }
+    ]
+  }
+}
+
+Possible errors:
+- 401 Unauthorized
+- 403 Forbidden
+- 404 Not Found if brand does not exist
+- 404 Not Found if one or more subcategory ids are missing
+- 400 Bad Request if body is invalid
+
+8) DELETE /brand/:id/subcategories/:subcategoryId
+Purpose: Remove a specific subcategory relationship from a brand.
+Access: ADMIN only
+Method: DELETE
+
+Success response example:
+{
+  "message": "Success",
+  "data": {
+    "deleted": true
+  }
+}
+
+Possible errors:
+- 401 Unauthorized
+- 403 Forbidden
+- 404 Not Found if the relation does not exist
+- 404 Not Found if the brand itself does not exist
+
+FRONTEND USAGE EXAMPLES
+
+Create brand (curl)
+curl -X POST http://localhost:3000/brand \
+  -H "Authorization: Bearer <admin_token>" \
+  -F "name=Nike" \
+  -F "subcategory_ids=[5,8]" \
+  -F "logo=@/path/to/logo.png"
+
+Update brand (curl)
+curl -X PATCH http://localhost:3000/brand/1 \
+  -H "Authorization: Bearer <admin_token>" \
+  -F "name=Nike Updated" \
+  -F "logo=@/path/to/new-logo.png"
+
+Delete brand (curl)
+curl -X DELETE http://localhost:3000/brand/1 \
+  -H "Authorization: Bearer <admin_token>"
+
+Get all brands (curl)
+curl -X GET http://localhost:3000/brand
+
+Get one brand (curl)
+curl -X GET http://localhost:3000/brand/1
+
+Add subcategories to a brand (curl)
+curl -X POST http://localhost:3000/brand/1/subcategories \
+  -H "Authorization: Bearer <admin_token>" \
+  -H "Content-Type: application/json" \
+  -d '{"subcategory_ids":[5,8]}'
+
+Remove subcategory assignment (curl)
+curl -X DELETE http://localhost:3000/brand/1/subcategories/5 \
+  -H "Authorization: Bearer <admin_token>"
+
+Summary
+The brand module exposes both public-facing catalog APIs and admin dashboard APIs.
+Public routes:
+- GET /brand
+- GET /brand/:id
+
+Admin routes:
+- GET /brand (dashboard list)
+- POST /brand
+- PATCH /brand/:id
+- DELETE /brand/:id
+- POST /brand/:id/subcategories
+- DELETE /brand/:id/subcategories/:subcategoryId
+
+All admin routes require ADMIN role and use the same interceptor + validation patterns as the rest of the backend.

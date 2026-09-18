@@ -16,14 +16,11 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { UserRole } from '../../generated/prisma/client.js';
 import { Roles } from '../decorators/roles.decorator';
 import { multerOptions } from '../utils/multer/multer';
-import {
-  getUploadPublicPath,
-  UploadFolder,
-} from '../utils/multer/upload-paths';
+import { getUploadPublicPath, UploadFolder } from '../utils/multer/upload-paths';
 import { BrandService } from './brand.service';
 import { CreateBrandDto } from './dto/create-brand.dto';
 import { UpdateBrandDto } from './dto/update-brand.dto';
-import { ManageCategoriesDto } from './dto/manage-categories.dto';
+import { ManageSubcategoriesDto } from './dto/manage-subcategories.dto';
 
 @Controller('brand')
 export class BrandController {
@@ -56,6 +53,13 @@ export class BrandController {
     return this.brandService.findAll();
   }
 
+  @Get()
+    @Roles(UserRole.ADMIN)
+  findAllForAdmin() {
+    return this.brandService.findAllForAdmin();
+  }
+
+
   @Get(':id')
   findOne(@Param('id') id: string) {
     return this.brandService.findOne(+id);
@@ -82,9 +86,7 @@ export class BrandController {
     return this.brandService.update(
       +id,
       updateBrandDto,
-      logo
-        ? getUploadPublicPath(UploadFolder.BRANDS, logo.filename)
-        : undefined,
+      logo ? getUploadPublicPath(UploadFolder.BRANDS, logo.filename) : undefined,
     );
   }
 
@@ -94,15 +96,18 @@ export class BrandController {
     return this.brandService.remove(+id);
   }
 
-  @Post(':id/categories')
+  @Post(':id/subcategories')
   @Roles(UserRole.ADMIN)
-  addCategories(@Param('id') id: string, @Body() dto: ManageCategoriesDto) {
-    return this.brandService.addCategories(+id, dto.category_ids);
+  addSubcategories(@Param('id') id: string, @Body() dto: ManageSubcategoriesDto) {
+    return this.brandService.addSubcategories(+id, dto.subcategory_ids);
   }
 
-  @Delete(':id/categories/:categoryId')
+  @Delete(':id/subcategories/:subcategoryId')
   @Roles(UserRole.ADMIN)
-  removeCategory(@Param('id') id: string, @Param('categoryId') categoryId: string) {
-    return this.brandService.removeCategory(+id, +categoryId);
+  removeSubcategory(
+    @Param('id') id: string,
+    @Param('subcategoryId') subcategoryId: string,
+  ) {
+    return this.brandService.removeSubcategory(+id, +subcategoryId);
   }
 }

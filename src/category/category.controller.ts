@@ -21,7 +21,7 @@ import { UpdateCategoryDto } from './dto/update-category.dto';
 @Controller('category')
 export class CategoryController {
   constructor(private readonly categoryService: CategoryService) {}
-
+// adminDashboard
   @Post()
   @Roles(UserRole.ADMIN)
   @UseInterceptors(FileInterceptor('image', multerOptions(UploadFolder.CATEGORIES)))
@@ -40,26 +40,26 @@ export class CategoryController {
     return this.categoryService.create(createCategoryDto, imageUrl);
   }
 
+  //fluter
   @Get()
   findAll() {
     return this.categoryService.findAll();
   }
 
-  @Get('parents')
-  findParents() {
-    return this.categoryService.getParents();
+  
+//admindashboard
+  @Get()
+    @Roles(UserRole.ADMIN)
+  findAllforAdmin() {
+    return this.categoryService.findAllforAdmin();
   }
 
-  @Get('children')
-  findChildren() {
-    return this.categoryService.getChildren();
-  }
-
+//flutter
   @Get(':id')
   findOne(@Param('id') id: string) {
     return this.categoryService.findOne(+id);
   }
-
+//admindashboard
   @Patch(':id')
   @Roles(UserRole.ADMIN)
   @UseInterceptors(FileInterceptor('image', multerOptions(UploadFolder.CATEGORIES)))
@@ -78,7 +78,7 @@ export class CategoryController {
 
     return this.categoryService.update(+id, updateCategoryDto, imageUrl);
   }
-
+//admindashboard
   @Delete(':id')
   @Roles(UserRole.ADMIN)
   remove(@Param('id') id: string) {

@@ -5,11 +5,11 @@ export class CreateBrandDto {
   @MinLength(2)
   name: string;
 
-  // Optional list of category IDs to associate with this brand on create
+  // Optional list of subcategory IDs to associate with this brand on create
   @IsOptional()
   @IsArray()
   @ArrayNotEmpty()
   @ArrayUnique()
   @IsInt({ each: true })
-  category_ids?: number[];
+  subcategory_ids?: number[];
 }

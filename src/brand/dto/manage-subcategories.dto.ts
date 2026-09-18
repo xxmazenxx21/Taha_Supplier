@@ -1,9 +1,9 @@
 import { IsArray, ArrayNotEmpty, ArrayUnique, IsInt } from 'class-validator';
 
-export class ManageCategoriesDto {
+export class ManageSubcategoriesDto {
   @IsArray()
   @ArrayNotEmpty()
   @ArrayUnique()
   @IsInt({ each: true })
-  category_ids: number[];
+  subcategory_ids: number[];
 }

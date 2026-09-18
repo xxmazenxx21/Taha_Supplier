@@ -45,11 +45,6 @@ export { Prisma }
  */
 export type Brand = Prisma.BrandModel
 /**
- * Model BrandCategory
- * 
- */
-export type BrandCategory = Prisma.BrandCategoryModel
-/**
  * Model Cart
  * 
  */
@@ -89,6 +84,16 @@ export type ProductImage = Prisma.ProductImageModel
  * 
  */
 export type Review = Prisma.ReviewModel
+/**
+ * Model SubCategory
+ * 
+ */
+export type SubCategory = Prisma.SubCategoryModel
+/**
+ * Model BrandSubCategory
+ * 
+ */
+export type BrandSubCategory = Prisma.BrandSubCategoryModel
 /**
  * Model User
  * 
