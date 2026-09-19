@@ -8,13 +8,41 @@ import {
   IsString,
   Min,
   MinLength,
+  ValidationArguments,
+  ValidationOptions,
+  registerDecorator,
 } from 'class-validator';
+
+/** Ensures discount_price is strictly less than price when provided. */
+function IsLessThan(property: string, validationOptions?: ValidationOptions) {
+  return (object: object, propertyName: string) => {
+    registerDecorator({
+      name: 'isLessThan',
+      target: (object as any).constructor,
+      propertyName,
+      constraints: [property],
+      options: {
+        message: `discount_price cannot be greater than or equal to price`,
+        ...validationOptions,
+      },
+      validator: {
+        validate(value: any, args: ValidationArguments) {
+          const [relatedPropertyName] = args.constraints as string[];
+          const relatedValue = (args.object as any)[relatedPropertyName];
+          if (value === undefined || value === null) return true;
+          if (typeof value !== 'number' || typeof relatedValue !== 'number') return true;
+          return value < relatedValue;
+        },
+      },
+    });
+  };
+}
 
 export class CreateProductDto {
   @Type(() => Number)
   @IsInt()
   @Min(1)
-  category_id: number;
+  subcategory_id: number;
 
   @Type(() => Number)
   @IsInt()
@@ -39,7 +67,8 @@ export class CreateProductDto {
   @IsOptional()
   @Type(() => Number)
   @IsNumber()
-  @Min(0)
+  @Min(1)
+  @IsLessThan('price')
   discount_price?: number;
 
   @IsString()

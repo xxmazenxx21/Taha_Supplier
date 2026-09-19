@@ -5,7 +5,7 @@ export class FindAllProductsDto {
   @IsOptional()
   @Type(() => Number)
   @IsInt()
-  category_id?: number;
+  subcategory_id?: number;
 
   @IsOptional()
   @IsString()
@@ -20,7 +20,6 @@ export class FindAllProductsDto {
   @Type(() => Number)
   @IsIn([0, 1])
   offers?: number;
-
 
   @IsOptional()
   @Type(() => Number)

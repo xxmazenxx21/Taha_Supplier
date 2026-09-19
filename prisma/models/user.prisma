@@ -32,4 +32,5 @@ model User {
 
   cart         Cart?
   couponUsages CouponUsage[]
+  reviews      Review[]
 }

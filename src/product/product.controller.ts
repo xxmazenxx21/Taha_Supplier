@@ -59,12 +59,23 @@ export class ProductController {
     return this.productService.create(createProductDto, mainImageUrl, galleryImageUrls);
   }
 
+
+
+
   @Get()
+   @Roles(UserRole.CLIENT)
   findAll(@Query() query: FindAllProductsDto) {
     return this.productService.findAll(query);
   }
 
+  @Get('admin')
+  @Roles(UserRole.ADMIN)
+  findAllAdmin() {
+    return this.productService.findAllAdmin();
+  }
+
   @Get('search')
+   @Roles(UserRole.CLIENT)
   searchProducts(@Query('q') q: string) {
     if (!q || q.length < 2) {
       throw new BadRequestException('Search query must be at least 2 characters long');
@@ -73,14 +84,11 @@ export class ProductController {
   }
 
   @Get(':id')
+    @Roles(UserRole.CLIENT)
   findOne(@Param('id') id: string) {
     return this.productService.findOne(+id);
   }
 
-  @Get(':id/reviews')
-  getReviews(@Param('id') id: string) {
-    return this.productService.getReviews(+id);
-  }
 
   @Patch(':id')
   @Roles(UserRole.ADMIN)
@@ -101,11 +109,26 @@ export class ProductController {
     return this.productService.update(+id, updateProductDto, mainImageUrl);
   }
 
+
+
+
+
+
+  
   @Delete(':id')
   @Roles(UserRole.ADMIN)
   remove(@Param('id') id: string) {
     return this.productService.remove(+id);
   }
+
+
+
+
+
+
+
+
+
 
   // --- Dedicated endpoints for gallery image management ---
 

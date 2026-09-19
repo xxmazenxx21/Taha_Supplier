@@ -23,7 +23,7 @@ export class ProductService {
     let discount_percentage: number | null = null;
     if (createProductDto.discount_price && createProductDto.price > 0) {
       discount_percentage = Math.round(
-        ((createProductDto.price - createProductDto.discount_price) / createProductDto.price) * 100
+        ((createProductDto.price - createProductDto.discount_price) / createProductDto.price) * 100,
       );
     }
 
@@ -50,17 +50,13 @@ export class ProductService {
         error instanceof Prisma.PrismaClientKnownRequestError &&
         error.code === 'P2003'
       ) {
-        throw new BadRequestException('Category or brand does not exist');
+        throw new BadRequestException('Subcategory or brand does not exist');
       }
       throw error;
     }
   }
 
-  async update(
-    id: number,
-    updateProductDto: UpdateProductDto,
-    mainImageUrl?: string,
-  ) {
+  async update(id: number, updateProductDto: UpdateProductDto, mainImageUrl?: string) {
     const product = await this.prisma.product.findUnique({
       where: { id },
       select: { image: true, price: true, discount_price: true },
@@ -72,15 +68,25 @@ export class ProductService {
     }
 
     const newPrice = updateProductDto.price !== undefined ? updateProductDto.price : Number(product.price);
-    const newDiscountPrice = updateProductDto.discount_price !== undefined 
-      ? updateProductDto.discount_price 
-      : (product.discount_price ? Number(product.discount_price) : null);
+    const newDiscountPrice =
+      updateProductDto.discount_price !== undefined
+        ? updateProductDto.discount_price
+        : product.discount_price
+          ? Number(product.discount_price)
+          : null;
+
+    // Guard: merged discount_price must always be strictly less than merged price.
+    // This catches the two PATCH-only edge cases the DTO decorator cannot see:
+    //   1. { discount_price: X } alone — price comes from the existing row.
+    //   2. { price: X } alone        — discount_price comes from the existing row.
+    if (newDiscountPrice !== null && newDiscountPrice >= newPrice) {
+      if (mainImageUrl) await this.deleteLocalFiles([mainImageUrl]);
+      throw new BadRequestException('discount_price cannot be greater than or equal to price');
+    }
 
     let discount_percentage: number | null = null;
     if (newDiscountPrice && newPrice > 0) {
-      discount_percentage = Math.round(
-        ((newPrice - newDiscountPrice) / newPrice) * 100
-      );
+      discount_percentage = Math.round(((newPrice - newDiscountPrice) / newPrice) * 100);
     }
 
     try {
@@ -107,7 +113,7 @@ export class ProductService {
         error instanceof Prisma.PrismaClientKnownRequestError &&
         error.code === 'P2003'
       ) {
-        throw new BadRequestException('Category or brand does not exist');
+        throw new BadRequestException('Subcategory or brand does not exist');
       }
       throw error;
     }
@@ -115,57 +121,54 @@ export class ProductService {
 
   // --- Gallery Image Management ---
 
- async addGalleryImages(productId: number, galleryImageUrls: string[]) {
-  const product = await this.prisma.product.findUnique({
-    where: { id: productId },
-    select: { id: true },
-  });
+  async addGalleryImages(productId: number, galleryImageUrls: string[]) {
+    const product = await this.prisma.product.findUnique({
+      where: { id: productId },
+      select: { id: true },
+    });
 
-  if (!product) {
-    await this.deleteLocalFiles(galleryImageUrls);
-    throw new NotFoundException('Product not found');
+    if (!product) {
+      await this.deleteLocalFiles(galleryImageUrls);
+      throw new NotFoundException('Product not found');
+    }
+
+    try {
+      const lastImage = await this.prisma.productImage.findFirst({
+        where: { product_id: productId },
+        orderBy: { display_order: 'desc' },
+      });
+      const startOrder = lastImage ? lastImage.display_order + 1 : 0;
+
+      await this.prisma.productImage.createMany({
+        data: galleryImageUrls.map((url, index) => ({
+          product_id: productId,
+          image_url: url,
+          display_order: startOrder + index,
+        })),
+      });
+    } catch (error) {
+      await this.deleteLocalFiles(galleryImageUrls);
+      throw error;
+    }
+
+    return this.findOne(productId);
   }
 
-  try {
-    const lastImage = await this.prisma.productImage.findFirst({
-      where: { product_id: productId },
-      orderBy: { display_order: 'desc' },
-    });
-    const startOrder = lastImage ? lastImage.display_order + 1 : 0;
 
-    await this.prisma.productImage.createMany({
-      data: galleryImageUrls.map((url, index) => ({
-        product_id: productId,
-        image_url: url,
-        display_order: startOrder + index,
-      })),
-    });
-  } catch (error) {
-    // بنمسح الملفات هنا بس، لأن الـ catch ده بيغلف الـ DB write الفعلي بس
-    await this.deleteLocalFiles(galleryImageUrls);
-    throw error;
-  }
 
-  // لو وصلنا هنا، الـ createMany نجحت فعلاً — الـ findOne برّه أي احتمال تنضيف غلط
-  return this.findOne(productId);
-}
+
+
 
   async removeGalleryImage(productId: number, imageId: number) {
     const image = await this.prisma.productImage.findFirst({
-      where: {
-        id: imageId,
-        product_id: productId,
-      },
+      where: { id: imageId, product_id: productId },
     });
 
     if (!image) {
       throw new NotFoundException('Product image not found');
     }
 
-    await this.prisma.productImage.delete({
-      where: { id: imageId },
-    });
-
+    await this.prisma.productImage.delete({ where: { id: imageId } });
     await this.deleteLocalFiles([image.image_url]);
 
     return { success: true };
@@ -196,9 +199,28 @@ export class ProductService {
     );
   }
 
+  async findAllAdmin() {
+    return await this.prisma.product.findMany({
+      orderBy: { created_at: 'desc' },
+      include: {
+        images: true,
+  
+        subCategory: { select: { id: true, name: true } },
+        brand: { select: { id: true, name: true, logo: true } },
+      },
+    });
+  }
+
+
+
+
+
+
+
+
   async findAll(query: FindAllProductsDto) {
     const {
-      category_id,
+      subcategory_id,
       search,
       available,
       offers,
@@ -206,12 +228,15 @@ export class ProductService {
       brand_id,
       sort,
       page = 1,
-      per_page = 20,
+      per_page = 10,
     } = query;
 
-    const where: Prisma.ProductWhereInput = {};
+    const where: Prisma.ProductWhereInput = {
+      // Only show products whose subcategory is not hidden
+      subCategory: { is_hidden: false },
+    };
 
-    if (category_id) where.category_id = category_id;
+    if (subcategory_id) where.subcategory_id = subcategory_id;
     if (brand_id) where.brand_id = brand_id;
     if (search) {
       where.OR = [
@@ -221,12 +246,11 @@ export class ProductService {
     }
     if (available === 1) where.is_available = true;
     if (offers === 1) where.discount_price = { not: null };
-    
-    if (min_rating !== undefined) {
-      where.rating = { gte: min_rating };
-    }
+    if (min_rating !== undefined) where.rating = { gte: min_rating };
 
-    let orderBy: any = { display_order: 'asc' };
+    let orderBy: Prisma.ProductOrderByWithRelationInput | Prisma.ProductOrderByWithRelationInput[] =
+      { display_order: 'asc' };
+
     switch (sort) {
       case 'bestSelling':
         orderBy = [{ is_best_seller: 'desc' }, { review_count: 'desc' }];
@@ -255,8 +279,8 @@ export class ProductService {
         take: per_page,
         include: {
           images: true,
-          category: { select: { name: true } },
-          brand: true,
+          subCategory: { select: { id: true, name: true } },
+          brand: { select: { id: true, name: true, logo: true } },
         },
       }),
     ]);
@@ -276,34 +300,42 @@ export class ProductService {
       is_available: product.is_available,
       rating: Number(product.rating),
       review_count: product.review_count,
-      category_id: product.category_id,
-      category_name: product.category?.name,
+      subcategory_id: product.subcategory_id,
+      subcategory_name: product.subCategory?.name,
       brand: product.brand,
       is_best_seller: product.is_best_seller,
       is_new: product.is_new,
     }));
 
-    // If offers filter is requested, ensure discount_price < price (effective offers only)
-    if (offers === 1) {
-      items = items.filter((p) => p.discount_price !== null && p.discount_price < p.price);
-    }
-
+ 
     return {
       items,
       page,
+      per_page,
       next_page,
       last_page,
       total,
     };
   }
 
+
+
+
+
+
+
+
+
+
+
+
   async findOne(id: number) {
     const product = await this.prisma.product.findUnique({
       where: { id },
       include: {
         images: true,
-        category: { select: { name: true } },
-        brand: true,
+        subCategory: { select: { id: true, name: true } },
+        brand: { select: { id: true, name: true, logo: true } },
       },
     });
 
@@ -314,6 +346,7 @@ export class ProductService {
     return {
       id: product.id,
       name: product.name,
+      description: product.description,
       image: product.image,
       images: product.images.map((img) => img.image_url),
       price: Number(product.price),
@@ -323,17 +356,21 @@ export class ProductService {
       is_available: product.is_available,
       rating: Number(product.rating),
       review_count: product.review_count,
-      category_id: product.category_id,
-      category_name: product.category?.name,
+      subcategory_id: product.subcategory_id,
+      subcategory_name: product.subCategory?.name,
       brand: product.brand,
       is_best_seller: product.is_best_seller,
       is_new: product.is_new,
+      display_order: product.display_order,
+      created_at: product.created_at,
+      updated_at: product.updated_at,
     };
   }
 
   async search(q: string) {
     const products = await this.prisma.product.findMany({
       where: {
+        subCategory: { is_hidden: false },
         OR: [
           { name: { contains: q, mode: 'insensitive' } },
           { brand: { name: { contains: q, mode: 'insensitive' } } },
@@ -341,8 +378,8 @@ export class ProductService {
       },
       include: {
         images: true,
-        category: { select: { name: true } },
-        brand: true,
+        subCategory: { select: { id: true, name: true } },
+        brand: { select: { id: true, name: true, logo: true } },
       },
       take: 20,
     });
@@ -359,27 +396,20 @@ export class ProductService {
       is_available: product.is_available,
       rating: Number(product.rating),
       review_count: product.review_count,
-      category_id: product.category_id,
-      category_name: product.category?.name,
+      subcategory_id: product.subcategory_id,
+      subcategory_name: product.subCategory?.name,
       brand: product.brand,
       is_best_seller: product.is_best_seller,
       is_new: product.is_new,
     }));
   }
 
-  async getReviews(id: number) {
-    const reviews = await this.prisma.review.findMany({
-      where: { product_id: id },
-      orderBy: { created_at: 'desc' },
-    });
 
-    return reviews.map((review) => ({
-      id: review.id,
-      author_name: review.author_name,
-      rating: review.rating,
-      comment: review.comment,
-      created_at: review.created_at,
-    }));
-  }
+
+
+
+
+
+
+
 }
-

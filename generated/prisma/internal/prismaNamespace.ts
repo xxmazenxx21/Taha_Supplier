@@ -1467,10 +1467,11 @@ export type ProductImageScalarFieldEnum = (typeof ProductImageScalarFieldEnum)[k
 export const ReviewScalarFieldEnum = {
   id: 'id',
   product_id: 'product_id',
-  author_name: 'author_name',
+  user_id: 'user_id',
   rating: 'rating',
   comment: 'comment',
-  created_at: 'created_at'
+  created_at: 'created_at',
+  updated_at: 'updated_at'
 } as const
 
 export type ReviewScalarFieldEnum = (typeof ReviewScalarFieldEnum)[keyof typeof ReviewScalarFieldEnum]

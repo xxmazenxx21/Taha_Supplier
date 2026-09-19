@@ -1,121 +1,214 @@
-Product API - Frontend Integration Guide
+# Admin Product Module Documentation
 
-Overview
-- Base path: /product
-- Auth: All endpoints require an authenticated admin token (Role: ADMIN)
-- Storage: Main product image stored in `image` field; gallery images via `ProductImage` records.
+## Base URL
+All endpoints are relative to the application's base URL (e.g. `http://localhost:3000`).
 
-Endpoints
+## Global Rules
+- **Authentication:** All requests must include a valid Bearer token for a user with the `ADMIN` role.
+- **Response Format:** All responses are intercepted and wrapped in a standard format:
+  ```json
+  {
+    "message": "Success", // or error message
+    "data": <actual_response_data>
+  }
+  ```
 
-1) Create product
-- Method: POST
-- Path: /product
-- Auth: ADMIN
-- Content-Type: multipart/form-data
-- Form fields (JSON fields):
-  - name (string)
-  - description (string)
-  - price (string/decimal)
-  - discount_price (string/decimal, optional)
-  - unit (string)
-  - category_id (number)
-  - brand_id (number)
-  - display_order (number, optional)
-  - status (optional) - usually omitted for creation
-- File fields:
-  - image (single) - required: main product image
-  - images (multiple) - optional: gallery files
-- Notes: Creates product and gallery images in a single request. Returns the created product including `images` array.
-- Errors: 400 (validation), 400 if category/brand invalid, 500 for server errors
+---
 
-2) Update product (no gallery replacement)
-- Method: PATCH
-- Path: /product/:id
-- Auth: ADMIN
-- Content-Type: multipart/form-data (only when replacing main image)
-- Updatable fields (in body): name, description, price, discount_price, unit, category_id, brand_id, display_order, status
-- File fields:
-  - image (single) - optional. If provided, replaces main image; old main image is deleted after successful DB update.
-- Important: This endpoint no longer updates or replaces gallery images. Manage gallery via dedicated endpoints.
-- Returns: updated product with `images` included
-- Errors: 404 if product not found, 400 if category/brand invalid
+### 1. Create a Product
+**Endpoint:** `POST /product`
+**Roles:** `ADMIN`
+**Content-Type:** `multipart/form-data`
 
-3) Soft-delete product
-- Method: DELETE
-- Path: /product/:id
-- Auth: ADMIN
-- Behavior: Marks product `status` as `UNAVAILABLE` (soft delete). Does not remove DB rows or gallery images.
-- Returns: updated product
-- Errors: 404 if product not found
+**Request Body (FormData):**
+- `subcategory_id` (number, required): ID of the subcategory.
+- `brand_id` (number, required): ID of the brand.
+- `name` (string, required, min length 2): Name of the product.
+- `description` (string, required): Product description.
+- `price` (number, required, min 0): Original price of the product.
+- `discount_price` (number, optional, min 1): Discounted price. Must be strictly less than `price`.
+- `unit` (string, required): Measurement unit (e.g., 'kg', 'pcs').
+- `is_available` (boolean string 'true'/'false', optional): Availability status. Default is `true`.
+- `is_best_seller` (boolean string 'true'/'false', optional): Mark as best seller. Default is `false`.
+- `is_new` (boolean string 'true'/'false', optional): Mark as new. Default is `false`.
+- `display_order` (number, optional): Custom ordering.
+- `image` (file, required): Main product image.
+- `images` (array of files, optional, max 10): Additional gallery images.
 
-4) Add gallery images (new)
-- Method: POST
-- Path: /product/:id/images
-- Auth: ADMIN
-- Content-Type: multipart/form-data
-- File field: images (multiple) - one or more files
-- Behavior:
-  - Validates product exists first. If product not found, uploaded files are removed from disk and 404 returned.
-  - Creates new `ProductImage` rows appended to the product (maintains display_order).
-  - On DB failure, newly uploaded files are deleted from disk.
-- Returns: the product (with `images`) after insertion
-- Errors: 400 if no files provided, 404 if product not found, 500 on server error
+**Example Request (FormData):**
+```text
+subcategory_id: 1
+brand_id: 2
+name: "Samsung Galaxy S24"
+description: "Latest smartphone"
+price: 999.99
+discount_price: 899.99
+unit: "pcs"
+image: [binary file]
+images: [binary file 1], [binary file 2]
+```
 
-5) Delete single gallery image (new)
-- Method: DELETE
-- Path: /product/:id/images/:imageId
-- Auth: ADMIN
-- Behavior:
-  - Checks that the `ProductImage` with id = `imageId` belongs to product `id`. If not found, returns 404.
-  - Deletes the DB row, then deletes the corresponding file from disk.
-  - If DB delete fails, file is not removed.
-- Returns: { success: true }
-- Errors: 404 if image not found or not belonging to product, 500 on server error
-
-Response shape (example product):
+**Success Response (201 Created):**
+```json
 {
-  id: number,
-  name: string,
-  description: string,
-  image: "/uploads/products/abcd.jpg", // main image public path
-  price: "10.00",
-  discount_price: "8.00" | null,
-  unit: string,
-  status: "AVAILABLE" | "UNAVAILABLE",
-  display_order: number,
-  images: [
-    { id: number, product_id: number, image_url: "/uploads/products/x.jpg", display_order: number },
-  ],
-  created_at: string,
-  updated_at: string,
+  "message": "Success",
+  "data": {
+    "id": 1,
+    "subcategory_id": 1,
+    "brand_id": 2,
+    "name": "Samsung Galaxy S24",
+    "description": "Latest smartphone",
+    "image": "/uploads/products/xyz.jpg",
+    "price": 999.99,
+    "discount_price": 899.99,
+    "discount_percentage": 10,
+    "rating": 0,
+    "review_count": 0,
+    "is_best_seller": false,
+    "is_new": false,
+    "unit": "pcs",
+    "is_available": true,
+    "display_order": 0,
+    "created_at": "2026-09-19T00:00:00.000Z",
+    "updated_at": "2026-09-19T00:00:00.000Z",
+    "images": [
+      {
+        "id": 1,
+        "product_id": 1,
+        "image_url": "/uploads/products/gallery1.jpg",
+        "display_order": 0,
+        "created_at": "2026-09-19T00:00:00.000Z"
+      }
+    ]
+  }
 }
+```
 
-Error codes to handle on frontend
-- 400: Bad request / validation errors
-- 404: Product or image not found
-- 401/403: Unauthorized / forbidden when not an admin
-- 500: Server error
+**Errors:**
+- `400 Bad Request`: "Main product image is required" (If `image` is missing).
+- `400 Bad Request`: "Subcategory or brand does not exist" (Foreign key constraint failed).
+- `400 Bad Request`: "discount_price cannot be greater than or equal to price"
+- `400 Bad Request`: "Validation failed (numeric string is expected)" (If text is sent instead of numbers for IDs).
 
-Example: Add gallery images (fetch)
+---
 
-fetch(`/product/${productId}/images`, {
-  method: 'POST',
-  headers: {
-    'Authorization': 'Bearer <token>'
-  },
-  body: formData // append multiple files under 'images'
-})
+### 2. Get All Products (Admin View)
+**Endpoint:** `GET /product/admin`
+**Roles:** `ADMIN`
 
-Example: Delete gallery image
-fetch(`/product/${productId}/images/${imageId}`, {
-  method: 'DELETE',
-  headers: { 'Authorization': 'Bearer <token>' }
-})
+This endpoint returns all products unfiltered, including their nested relationships, sorted by `created_at` descending. It ignores the subcategory visibility status (unlike the client view).
 
-Notes for frontend
-- Use multipart/form-data for endpoints that upload files.
-- Ensure to pass admin auth token for protected endpoints.
-- When replacing main image via PATCH, backend removes old main image only after DB update succeeds.
-- Gallery images are managed exclusively via POST /product/:id/images and DELETE /product/:id/images/:imageId.
+**Success Response (200 OK):**
+```json
+{
+  "message": "Success",
+  "data": [
+    {
+      "id": 1,
+      "name": "Samsung Galaxy S24",
+      "image": "/uploads/products/xyz.jpg",
+      "price": 999.99,
+      "subCategory": {
+        "id": 1,
+        "name": "Smartphones"
+      },
+      "brand": {
+        "id": 2,
+        "name": "Samsung",
+        "logo": "/uploads/brands/samsung.jpg"
+      },
+      "images": [...]
+    }
+  ]
+}
+```
 
+---
 
+### 3. Update a Product
+**Endpoint:** `PATCH /product/:id`
+**Roles:** `ADMIN`
+**Content-Type:** `multipart/form-data`
+
+**Request Body (FormData):**
+- Can contain any of the fields from the Create DTO, all are optional.
+- `image` (file, optional): If provided, replaces the main product image and deletes the old one.
+
+**Success Response (200 OK):**
+```json
+{
+  "message": "Success",
+  "data": {
+    "id": 1,
+    "name": "Samsung Galaxy S24 Updated",
+    "price": 950.00,
+    ...
+  }
+}
+```
+
+**Errors:**
+- `404 Not Found`: "Product not found"
+- `400 Bad Request`: "Subcategory or brand does not exist"
+- `400 Bad Request`: "discount_price cannot be greater than or equal to price" (Evaluates both submitted values and existing database values).
+
+---
+
+### 4. Delete a Product (Soft Delete)
+**Endpoint:** `DELETE /product/:id`
+**Roles:** `ADMIN`
+
+Sets `is_available` to `false` for the specified product.
+
+**Success Response (200 OK):**
+```json
+{
+  "message": "Success",
+  "data": {
+    "id": 1,
+    "is_available": false,
+    ...
+  }
+}
+```
+
+**Errors:**
+- `404 Not Found`: "Product not found"
+
+---
+
+### 5. Add Gallery Images
+**Endpoint:** `POST /product/:id/images`
+**Roles:** `ADMIN`
+**Content-Type:** `multipart/form-data`
+
+**Request Body:**
+- `images` (array of files, max 10, required).
+
+**Success Response (201 Created):**
+Returns the entire product object (same structure as `GET /product/:id`) with the newly appended images.
+
+**Errors:**
+- `400 Bad Request`: "No images provided"
+- `404 Not Found`: "Product not found"
+
+---
+
+### 6. Remove a Gallery Image
+**Endpoint:** `DELETE /product/:id/images/:imageId`
+**Roles:** `ADMIN`
+
+Deletes a specific gallery image by its ID and removes the file from local storage.
+
+**Success Response (200 OK):**
+```json
+{
+  "message": "Success",
+  "data": {
+    "success": true
+  }
+}
+```
+
+**Errors:**
+- `404 Not Found`: "Product image not found"
