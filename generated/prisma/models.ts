@@ -8,15 +8,20 @@
  *
  * 🟢 You can import this file directly.
  */
+export type * from './models/Banner.js'
+export type * from './models/BannerImage.js'
 export type * from './models/Brand.js'
 export type * from './models/Cart.js'
 export type * from './models/CartItem.js'
 export type * from './models/Category.js'
 export type * from './models/Coupon.js'
 export type * from './models/CouponUsage.js'
+export type * from './models/Order.js'
+export type * from './models/OrderItem.js'
 export type * from './models/Product.js'
 export type * from './models/ProductImage.js'
 export type * from './models/Review.js'
+export type * from './models/ShippingZone.js'
 export type * from './models/SubCategory.js'
 export type * from './models/BrandSubCategory.js'
 export type * from './models/User.js'

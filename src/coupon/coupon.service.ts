@@ -1,12 +1,13 @@
-import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, ConflictException, NotFoundException } from '@nestjs/common';
 import { CreateCouponDto } from './dto/create-coupon.dto';
 import { UpdateCouponDto } from './dto/update-coupon.dto';
 import { PrismaService } from '../prisma/prisma.service';
+
 @Injectable()
 export class CouponService {
+  constructor(private readonly prisma: PrismaService) {}
 
-   constructor(private readonly prisma: PrismaService) {}
- async create(createCouponDto: CreateCouponDto) {
+  async create(createCouponDto: CreateCouponDto) {
     const existingCoupon = await this.prisma.coupon.findUnique({
       where: { code: createCouponDto.code },
     });
@@ -15,22 +16,27 @@ export class CouponService {
       throw new ConflictException('Coupon already exists with this code');
     }
 
-    const data: any = {
-      code: createCouponDto.code,
-      discount_type: createCouponDto.discount_type,
-      discount_value: createCouponDto.discount_value,
-      min_order_amount: createCouponDto.min_order_amount ?? undefined,
-      start_date: createCouponDto.start_date ? new Date(createCouponDto.start_date) : undefined,
-      end_date: createCouponDto.end_date ? new Date(createCouponDto.end_date) : undefined,
-      usage_limit: createCouponDto.usage_limit ?? undefined,
-      status: createCouponDto.status ?? undefined,
-    };
+    const coupon = await this.prisma.coupon.create({
+      data: {
+        code: createCouponDto.code,
+        discount_value: createCouponDto.discount_value,
+        min_order_amount: createCouponDto.min_order_amount ?? undefined,
+        start_date: createCouponDto.start_date
+          ? new Date(createCouponDto.start_date)
+          : undefined,
+        end_date: createCouponDto.end_date
+          ? new Date(createCouponDto.end_date)
+          : undefined,
+        usage_limit: createCouponDto.usage_limit ?? undefined,
+        status: createCouponDto.status ?? undefined,
+      },
+    });
 
-    const coupon = await this.prisma.coupon.create({ data });
     return coupon;
   }
 
-  async findAll() {
+  /** Get all coupons — no filters, admin only */
+  async getAllCouponForAdmin() {
     return this.prisma.coupon.findMany({ orderBy: { created_at: 'desc' } });
   }
 
@@ -53,6 +59,7 @@ export class CouponService {
     return this.prisma.coupon.update({ where: { id }, data });
   }
 
+  /** Hard delete — permanently removes the coupon */
   async remove(id: number) {
     const coupon = await this.prisma.coupon.findUnique({ where: { id } });
     if (!coupon) throw new NotFoundException('Coupon not found');

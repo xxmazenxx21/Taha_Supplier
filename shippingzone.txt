@@ -1,0 +1,237 @@
+FRONTEND DOCUMENTATION - SHIPPING ZONE MODULE
+
+Base URL
+- http://localhost:3000
+
+Scope
+This document covers all shipping zone API routes in the backend, including admin management and client access.
+Relevant controller: src/shipping-zone/shipping-zone.controller.ts
+Relevant service: src/shipping-zone/shipping-zone.service.ts
+
+GLOBAL RESPONSE FORMAT
+The project uses a global response interceptor for successful responses.
+All success responses are wrapped like this:
+{
+  "message": "Success",
+  "data": { ...actual payload... }
+}
+
+Important:
+- Successful responses are wrapped by the interceptor.
+- Error responses still use Nest default format, such as { message, error, statusCode }.
+
+GENERAL AUTH RULES
+- Public endpoints do not require a token.
+- Admin-only endpoints require:
+  Authorization: Bearer <token>
+- If token is missing, malformed, expired, or invalid: 401 Unauthorized
+- If role is missing: 403 Forbidden
+  message: "You do not have permission (no role found)"
+- If user role is not ADMIN: 403 Forbidden
+  message: "You do not have the required roles to access this resource"
+
+COMMON VALIDATION RULES
+- ValidationPipe is enabled globally with transform: true, whitelist: true, forbidNonWhitelisted: true.
+- Extra fields in DTO payloads are rejected with 400 Bad Request.
+
+COMMON ERROR EXAMPLES
+1) Missing token
+{
+  "message": "Unauthorized",
+  "error": "Unauthorized",
+  "statusCode": 401
+}
+
+2) No role in token
+{
+  "message": "You do not have permission (no role found)",
+  "error": "Forbidden",
+  "statusCode": 403
+}
+
+3) User role is not ADMIN
+{
+  "message": "You do not have the required roles to access this resource",
+  "error": "Forbidden",
+  "statusCode": 403
+}
+
+4) DTO validation error
+{
+  "message": [
+    "name must be longer than or equal to 2 characters"
+  ],
+  "error": "Bad Request",
+  "statusCode": 400
+}
+
+5) Duplicate shipping zone name
+{
+  "message": "Shipping zone name already exists",
+  "error": "Conflict",
+  "statusCode": 409
+}
+
+6) Shipping zone not found
+{
+  "message": "Shipping zone not found",
+  "error": "Not Found",
+  "statusCode": 404
+}
+
+ADMIN ENDPOINTS
+
+1) POST /shipping-zone
+Purpose: Create a shipping zone in the admin panel.
+Access: ADMIN only
+Method: POST
+Content-Type: application/json
+
+Request body:
+{
+  "name": "المنصورة",
+  "shipping_cost": 25,
+  "is_active": true,
+  "display_order": 1
+}
+
+Field rules:
+- name: string, required, unique
+- shipping_cost: number or decimal, required
+- is_active: boolean, optional, default true
+- display_order: number, optional, default 0
+
+Success response example:
+{
+  "message": "Success",
+  "data": {
+    "id": 1,
+    "name": "المنصورة",
+    "shipping_cost": "25.00",
+    "is_active": true,
+    "display_order": 1,
+    "created_at": "2026-09-19T00:00:00.000Z",
+    "updated_at": "2026-09-19T00:00:00.000Z"
+  }
+}
+
+Possible errors:
+- 401 Unauthorized
+- 403 Forbidden
+- 409 Conflict if shipping zone name already exists
+- 400 Bad Request if DTO data is invalid
+
+2) GET /shipping-zone/admin
+Purpose: Get all shipping zones for the admin dashboard without client filtering.
+Access: ADMIN only
+Method: GET
+
+Success response example:
+{
+  "message": "Success",
+  "data": [
+    {
+      "id": 1,
+      "name": "المنصورة",
+      "shipping_cost": "25.00",
+      "is_active": true,
+      "display_order": 1,
+      "created_at": "2026-09-19T00:00:00.000Z",
+      "updated_at": "2026-09-19T00:00:00.000Z"
+    },
+    {
+      "id": 2,
+      "name": "القاهرة",
+      "shipping_cost": "35.00",
+      "is_active": false,
+      "display_order": 2,
+      "created_at": "2026-09-19T00:05:00.000Z",
+      "updated_at": "2026-09-19T00:10:00.000Z"
+    }
+  ]
+}
+
+Possible errors:
+- 401 Unauthorized
+- 403 Forbidden
+- 500 Internal Server Error if database query fails
+
+3) PATCH /shipping-zone/:id
+Purpose: Update an existing shipping zone.
+Access: ADMIN only
+Method: PATCH
+Content-Type: application/json
+
+Request body (partial update allowed):
+{
+  "name": "القاهرة الجديدة",
+  "shipping_cost": 40,
+  "is_active": true,
+  "display_order": 3
+}
+
+Success response example:
+{
+  "message": "Success",
+  "data": {
+    "id": 2,
+    "name": "القاهرة الجديدة",
+    "shipping_cost": "40.00",
+    "is_active": true,
+    "display_order": 3,
+    "created_at": "2026-09-19T00:05:00.000Z",
+    "updated_at": "2026-09-19T00:20:00.000Z"
+  }
+}
+
+Possible errors:
+- 401 Unauthorized
+- 403 Forbidden
+- 404 Not Found if shipping zone does not exist
+- 409 Conflict if new name already exists
+- 400 Bad Request if validation fails
+
+ADMIN PANEL NOTES
+- Use GET /shipping-zone/admin to load shipping zones for dashboard listing.
+- Use POST /shipping-zone to create new delivery zones.
+- Use PATCH /shipping-zone/:id to update zone cost, status, and order.
+- The field is_active decides whether the zone is available for client checkout.
+- display_order controls sorting in the UI and in returned lists.
+
+CLIENT ACCESS
+
+4) GET /shipping-zone
+Purpose: Get all active shipping zones used during checkout.
+Access: CLIENT only
+Method: GET
+
+This is the route used for the mobile app or frontend cart/order flow.
+
+Success response example:
+{
+  "message": "Success",
+  "data": [
+    {
+      "id": 1,
+      "name": "المنصورة",
+      "shipping_cost": "25.00",
+      "display_order": 1
+    },
+    {
+      "id": 3,
+      "name": "الإسكندرية",
+      "shipping_cost": "45.00",
+      "display_order": 2
+    }
+  ]
+}
+
+Important:
+- Only zones where is_active = true are returned.
+- Results are ordered by display_order ascending.
+- This is the client-facing method for selecting shipping destination or shipping cost.
+
+Possible errors:
+- 401 Unauthorized
+- 403 Forbidden
+- 500 Internal Server Error if database query fails

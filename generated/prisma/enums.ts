@@ -9,12 +9,16 @@
 * 🟢 You can import this file directly.
 */
 
-export const DiscountType = {
-  PERCENTAGE: 'PERCENTAGE',
-  FIXED: 'FIXED'
+export const BannerActionType = {
+  NONE: 'NONE',
+  CATEGORY: 'CATEGORY',
+  PRODUCT: 'PRODUCT',
+  BRAND: 'BRAND',
+  FILTER: 'FILTER',
+  PAGE: 'PAGE'
 } as const
 
-export type DiscountType = (typeof DiscountType)[keyof typeof DiscountType]
+export type BannerActionType = (typeof BannerActionType)[keyof typeof BannerActionType]
 
 
 export const CouponStatus = {
@@ -23,6 +27,36 @@ export const CouponStatus = {
 } as const
 
 export type CouponStatus = (typeof CouponStatus)[keyof typeof CouponStatus]
+
+
+export const OrderStatus = {
+  PENDING: 'PENDING',
+  CONFIRMED: 'CONFIRMED',
+  PROCESSING: 'PROCESSING',
+  SHIPPED: 'SHIPPED',
+  DELIVERED: 'DELIVERED',
+  CANCELLED: 'CANCELLED',
+  CLIENTCANCELLED: 'CLIENTCANCELLED'
+} as const
+
+export type OrderStatus = (typeof OrderStatus)[keyof typeof OrderStatus]
+
+
+export const PaymentMethod = {
+  CASH: 'CASH',
+  CARD: 'CARD'
+} as const
+
+export type PaymentMethod = (typeof PaymentMethod)[keyof typeof PaymentMethod]
+
+
+export const PaymentStatus = {
+  PENDING: 'PENDING',
+  APPROVED: 'APPROVED',
+  REJECTED: 'REJECTED'
+} as const
+
+export type PaymentStatus = (typeof PaymentStatus)[keyof typeof PaymentStatus]
 
 
 export const UserRole = {

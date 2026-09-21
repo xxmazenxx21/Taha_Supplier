@@ -1,0 +1,90 @@
+// ─────────────────────────────────────────────
+// Order status lifecycle:
+//   PENDING → CONFIRMED → PROCESSING → SHIPPED → DELIVERED
+//   Any status → CANCELLED or CLIENTCANCELLED
+// ─────────────────────────────────────────────
+
+enum OrderStatus {
+  PENDING      // just placed, awaiting confirmation
+  CONFIRMED    // confirmed by orders staff / admin
+  PROCESSING   // being prepared
+  SHIPPED      // handed to delivery
+  DELIVERED    // received by client
+  CANCELLED       // cancelled by admin
+  CLIENTCANCELLED // cancelled by client
+}
+
+enum PaymentMethod {
+  CASH  // cash on delivery
+  CARD  // client uploads a bank-transfer proof image; admin reviews manually
+}
+
+enum PaymentStatus {
+  PENDING   // not yet reviewed (default for CARD) or not yet collected (CASH)
+  APPROVED  // admin approved the transfer image
+  REJECTED  // admin rejected the transfer image (client must re-upload or switch method)
+}
+
+// ─────────────────────────────────────────────
+// Main order record
+// ─────────────────────────────────────────────
+model Order {
+  id               Int           @id @default(autoincrement())
+  user_id          Int
+  coupon_id        Int?
+  shipping_zone_id Int
+
+  status          OrderStatus   @default(PENDING)
+  payment_method  PaymentMethod
+  payment_status  PaymentStatus @default(PENDING)
+
+  // Only filled when payment_method = CARD
+  // Client uploads a photo of the bank-transfer receipt
+  payment_proof_image String?
+
+  // Pricing snapshot (Decimal for accuracy)
+  subtotal        Decimal       @db.Decimal(10, 2)   // sum of (item price × qty) before discount
+  discount_amount Decimal       @default(0) @db.Decimal(10, 2) // from coupon
+  shipping_fee    Decimal       @db.Decimal(10, 2)   // snapshotted from ShippingZone.shipping_cost at order time
+  total_amount    Decimal       @db.Decimal(10, 2)   // subtotal - discount_amount + shipping_fee
+
+  // Delivery info — snapshot of client address at order time
+  delivery_address  String
+  delivery_lat      Decimal?    @db.Decimal(10, 7)
+  delivery_lng      Decimal?    @db.Decimal(10, 7)
+  delivery_notes    String?
+
+  // Timestamps
+  created_at      DateTime      @default(now())
+  updated_at      DateTime      @updatedAt
+  delivered_at    DateTime?
+
+  // Relations
+  user            User          @relation(fields: [user_id], references: [id])
+  coupon          Coupon?       @relation(fields: [coupon_id], references: [id])
+  shippingZone    ShippingZone  @relation(fields: [shipping_zone_id], references: [id])
+  items           OrderItem[]
+  couponUsage     CouponUsage?
+}
+
+// ─────────────────────────────────────────────
+// Each product line inside an order.
+// Prices are snapshotted so history never changes
+// even if the product price is updated later.
+// ─────────────────────────────────────────────
+model OrderItem {
+  id           Int     @id @default(autoincrement())
+  order_id     Int
+  product_id   Int
+
+  quantity     Int
+  unit_price   Decimal @db.Decimal(10, 2) // product price at time of order
+  total_price  Decimal @db.Decimal(10, 2) // unit_price × quantity
+
+  // Snapshot of product name/unit in case product is deleted later
+  product_name String
+  product_unit String
+
+  order   Order   @relation(fields: [order_id], references: [id], onDelete: Cascade)
+  product Product @relation(fields: [product_id], references: [id])
+}

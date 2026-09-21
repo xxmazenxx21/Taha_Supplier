@@ -1,0 +1,256 @@
+ADMIN BANNER API DOCUMENTATION
+
+Base URL
+http://localhost:3000
+
+Authentication
+- All endpoints require: Authorization: Bearer <ADMIN_TOKEN>
+- POST, PATCH, and DELETE are ADMIN-only.
+- GET /banner and GET /banner/:id accept ADMIN or CLIENT tokens.
+- Missing or invalid token: 401 Unauthorized.
+- A non-admin user calling an admin endpoint: 403 Forbidden.
+
+Response wrapper
+Successful responses use the global application wrapper:
+
+{
+  "message": "Success",
+  "data": <response data>
+}
+
+Banner fields
+- title: optional string
+- is_active: optional boolean; multipart values can be "true" or "false"
+- sort_order: optional integer, minimum 0
+- images: uploaded banner images, maximum 10 per request
+
+Supported image actions
+- NONE: no destination; target ID and target data must be omitted
+- CATEGORY: requires click_target_id for an existing category
+- PRODUCT: requires click_target_id for an existing product
+- BRAND: requires click_target_id for an existing non-deleted brand
+- FILTER: requires a non-empty click_target_data object
+- PAGE: currently rejected with: PAGE action is UNKNOWN / VERIFY IN SOURCE
+
+The action belongs to each BannerImage. A single banner can therefore have
+different actions for different images.
+
+FILTER click_target_data
+FILTER uses the existing Product filtering DTO. Supported fields are:
+- subcategory_id: integer
+- brand_id: integer
+- search: string
+- available: 0 or 1
+- offers: 0 or 1
+- min_rating: number
+- sort: bestSelling, newest, topRated, or nameAsc
+- page: integer
+- per_page: integer
+
+Do not send arbitrary filter fields. Unknown filter fields are rejected.
+
+1. Create a banner
+
+POST /banner
+Content-Type: multipart/form-data
+
+Multipart fields:
+- images: required; repeat this field for multiple image files
+- title: optional string
+- is_active: optional boolean or "true"/"false"
+- sort_order: optional integer >= 0
+- image_configs: optional JSON string containing one object per uploaded image
+
+The order of the uploaded images must match the order of image_configs.
+If image_configs is omitted, every uploaded image receives:
+- click_action_type: NONE
+- sort_order: its upload index
+
+Example image_configs value:
+
+[
+  {
+    "sort_order": 0,
+    "click_action_type": "CATEGORY",
+    "click_target_id": 5
+  },
+  {
+    "sort_order": 1,
+    "click_action_type": "FILTER",
+    "click_target_data": {
+      "subcategory_id": 2,
+      "offers": 1,
+      "sort": "topRated"
+    }
+  },
+  {
+    "sort_order": 2,
+    "click_action_type": "NONE"
+  }
+]
+
+cURL example:
+
+curl -X POST http://localhost:3000/banner \
+  -H "Authorization: Bearer <ADMIN_TOKEN>" \
+  -F "title=Summer Sale" \
+  -F "is_active=true" \
+  -F "sort_order=0" \
+  -F 'image_configs=[{"sort_order":0,"click_action_type":"CATEGORY","click_target_id":5},{"sort_order":1,"click_action_type":"FILTER","click_target_data":{"subcategory_id":2,"offers":1}}]' \
+  -F "images=@summer-category.jpg" \
+  -F "images=@summer-offers.jpg"
+
+Success response: 201 Created
+
+{
+  "message": "Success",
+  "data": {
+    "id": 1,
+    "title": "Summer Sale",
+    "is_active": true,
+    "sort_order": 0,
+    "created_at": "2026-09-21T10:00:00.000Z",
+    "updated_at": "2026-09-21T10:00:00.000Z",
+    "images": [
+      {
+        "id": 10,
+        "banner_id": 1,
+        "image_url": "/uploads/banners/abc.jpg",
+        "sort_order": 0,
+        "click_action_type": "CATEGORY",
+        "click_target_id": 5,
+        "click_target_data": null,
+        "created_at": "2026-09-21T10:00:00.000Z"
+      },
+      {
+        "id": 11,
+        "banner_id": 1,
+        "image_url": "/uploads/banners/def.jpg",
+        "sort_order": 1,
+        "click_action_type": "FILTER",
+        "click_target_id": null,
+        "click_target_data": {
+          "subcategory_id": 2,
+          "offers": 1
+        },
+        "created_at": "2026-09-21T10:00:00.000Z"
+      }
+    ]
+  }
+}
+
+2. Get all banners
+
+GET /banner
+Authorization: Bearer <ADMIN_TOKEN>
+
+Returns all banners, including inactive banners, ordered by:
+1. sort_order ASC
+2. created_at DESC
+
+Images are ordered by sort_order ASC.
+
+3. Get one banner
+
+GET /banner/:id
+Authorization: Bearer <ADMIN_TOKEN>
+
+Example:
+GET /banner/1
+
+The response contains the banner and all of its ordered images.
+
+Possible error:
+- 404: Banner not found
+
+4. Update banner fields only
+
+PATCH /banner/:id
+Content-Type: multipart/form-data
+
+All fields are optional:
+- title
+- is_active
+- sort_order
+
+If no images are uploaded, the existing images are preserved.
+
+Example:
+
+curl -X PATCH http://localhost:3000/banner/1 \
+  -H "Authorization: Bearer <ADMIN_TOKEN>" \
+  -F "title=Updated Summer Sale" \
+  -F "is_active=false" \
+  -F "sort_order=2"
+
+5. Replace all banner images
+
+PATCH /banner/:id
+Content-Type: multipart/form-data
+
+When one or more new images are uploaded:
+- all previous BannerImage records are replaced
+- image_configs must contain one object per new image when custom actions are used
+- the uploaded image order matches the image_configs order
+- old physical image files are deleted after a successful replacement
+
+Example:
+
+curl -X PATCH http://localhost:3000/banner/1 \
+  -H "Authorization: Bearer <ADMIN_TOKEN>" \
+  -F "image_configs=[{\"sort_order\":0,\"click_action_type\":\"PRODUCT\",\"click_target_id\":123}]" \
+  -F "images=@new-product-banner.jpg"
+
+6. Update existing image actions/order without uploading files
+
+PATCH /banner/:id
+Content-Type: multipart/form-data
+
+If image_configs is sent without new images, every configuration must contain
+the existing image_id. The listed images keep their files and can update:
+- sort_order
+- click_action_type
+- click_target_id
+- click_target_data
+
+Example:
+
+image_configs=[
+  {
+    "image_id": 10,
+    "sort_order": 0,
+    "click_action_type": "PRODUCT",
+    "click_target_id": 123
+  },
+  {
+    "image_id": 11,
+    "sort_order": 1,
+    "click_action_type": "NONE"
+  }
+]
+
+7. Delete a banner
+
+DELETE /banner/:id
+Authorization: Bearer <ADMIN_TOKEN>
+
+The banner and related BannerImage database records are deleted. Associated
+local image files are also removed. Missing physical files are ignored.
+
+Success response:
+
+{
+  "message": "Success",
+  "data": { "success": true }
+}
+
+Validation and upload rules
+- At least one image is required when creating a banner.
+- File field name must be images.
+- Maximum 10 image files per create/update request.
+- Allowed image MIME types: image/jpeg, image/jpg, image/png, image/webp.
+- Maximum file size is less than 5MB.
+- Every uploaded image must have a matching image_configs object if custom
+  image configurations are supplied.
+- Invalid JSON, unsupported actions, missing targets, or missing referenced
+  records return 400/404 errors.

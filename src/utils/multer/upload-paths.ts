@@ -4,7 +4,8 @@ export enum UploadFolder {
   BRANDS = 'brands',
   CATEGORIES = 'categories',
   PRODUCTS = 'products',
-    SUB_CATEGORY = 'sub-category'
+  SUB_CATEGORY = 'sub-category',
+  BANNERS = 'banners',
 }
 
 const uploadsRoot = resolve(process.cwd(), 'uploads');

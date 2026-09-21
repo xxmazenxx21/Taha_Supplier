@@ -18,6 +18,16 @@ export { Prisma }
 export * as $Enums from './enums.js'
 export * from './enums.js';
 /**
+ * Model Banner
+ * 
+ */
+export type Banner = Prisma.BannerModel
+/**
+ * Model BannerImage
+ * 
+ */
+export type BannerImage = Prisma.BannerImageModel
+/**
  * Model Brand
  * 
  */
@@ -48,6 +58,16 @@ export type Coupon = Prisma.CouponModel
  */
 export type CouponUsage = Prisma.CouponUsageModel
 /**
+ * Model Order
+ * 
+ */
+export type Order = Prisma.OrderModel
+/**
+ * Model OrderItem
+ * 
+ */
+export type OrderItem = Prisma.OrderItemModel
+/**
  * Model Product
  * 
  */
@@ -62,6 +82,11 @@ export type ProductImage = Prisma.ProductImageModel
  * 
  */
 export type Review = Prisma.ReviewModel
+/**
+ * Model ShippingZone
+ * 
+ */
+export type ShippingZone = Prisma.ShippingZoneModel
 /**
  * Model SubCategory
  * 

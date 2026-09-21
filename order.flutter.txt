@@ -1,0 +1,322 @@
+# Flutter Client Order API Documentation
+
+## Base URL
+
+All endpoints are relative to the application base URL, for example:
+`http://localhost:3000`
+
+## Global Rules
+
+- Every request requires `Authorization: Bearer <client-token>`.
+- The authenticated user must have the `CLIENT` role.
+- The server identifies the client from the JWT `sub` value. Do not send `user_id` in the request body.
+- Responses use the global wrapper:
+
+```json
+{
+  "message": "Success",
+  "data": {}
+}
+```
+
+- Monetary response values are rounded numbers in EGP.
+
+## Order Status Values
+
+```text
+PENDING
+CONFIRMED
+PROCESSING
+SHIPPED
+DELIVERED
+CANCELLED          // admin cancellation
+CLIENTCANCELLED   // client cancellation
+```
+
+## 1. Place an Order
+
+**Endpoint:** `POST /order`
+
+Creates an order from the authenticated client's current cart. The cart is cleared only after the order is created successfully.
+
+### Request Body
+
+- `shipping_zone_id` (integer, required)
+- `payment_method` (required): `CASH` or `CARD`
+- `payment_proof_image` (string, required for `CARD`)
+- `delivery_address` (string, required)
+- `delivery_lat` (number, optional, maximum 7 decimal places)
+- `delivery_lng` (number, optional, maximum 7 decimal places)
+- `delivery_notes` (string, optional)
+
+### Example Request — Cash
+
+```http
+POST /order
+Authorization: Bearer <client-token>
+Content-Type: application/json
+```
+
+```json
+{
+  "shipping_zone_id": 1,
+  "payment_method": "CASH",
+  "delivery_address": "Mansoura, El-Gomhoria Street",
+  "delivery_lat": 31.0409,
+  "delivery_lng": 31.3785,
+  "delivery_notes": "Call before delivery"
+}
+```
+
+### Example Request — Card
+
+```json
+{
+  "shipping_zone_id": 1,
+  "payment_method": "CARD",
+  "payment_proof_image": "/uploads/payment-proofs/receipt-42.jpg",
+  "delivery_address": "Mansoura, El-Gomhoria Street"
+}
+```
+
+### Success Response — 201 Created
+
+```json
+{
+  "message": "Success",
+  "data": {
+    "id": 42,
+    "user_id": 7,
+    "coupon_id": null,
+    "shipping_zone_id": 1,
+    "status": "PENDING",
+    "payment_method": "CASH",
+    "payment_status": "PENDING",
+    "payment_proof_image": null,
+    "subtotal": 500,
+    "discount_amount": 0,
+    "shipping_fee": 25,
+    "total_amount": 525,
+    "delivery_address": "Mansoura, El-Gomhoria Street",
+    "delivery_lat": 31.0409,
+    "delivery_lng": 31.3785,
+    "delivery_notes": "Call before delivery",
+    "created_at": "2026-09-21T10:00:00.000Z",
+    "updated_at": "2026-09-21T10:00:00.000Z",
+    "delivered_at": null,
+    "items": [
+      {
+        "id": 101,
+        "order_id": 42,
+        "product_id": 5,
+        "quantity": 2,
+        "unit_price": 250,
+        "total_price": 500,
+        "product_name": "Premium Coffee",
+        "product_unit": "1 kg"
+      }
+    ]
+  }
+}
+```
+
+### Errors
+
+- `400 Bad Request`: invalid fields or missing `payment_proof_image` for `CARD`.
+- `401 Unauthorized`: missing or invalid token.
+- `403 Forbidden`: authenticated user is not a client.
+- `409 Conflict`: empty cart, unavailable product, inactive shipping zone, invalid coupon, or concurrent cart change.
+
+## 2. Get My Orders
+
+**Endpoint:** `GET /order`
+
+Returns only orders belonging to the authenticated client, sorted by newest first.
+
+### Example Request
+
+```http
+GET /order
+Authorization: Bearer <client-token>
+```
+
+### Success Response — 200 OK
+
+```json
+{
+  "message": "Success",
+  "data": [
+    {
+      "id": 42,
+      "user_id": 7,
+      "coupon_id": null,
+      "shipping_zone_id": 1,
+      "status": "PENDING",
+      "payment_method": "CASH",
+      "payment_status": "PENDING",
+      "payment_proof_image": null,
+      "subtotal": 500,
+      "discount_amount": 0,
+      "shipping_fee": 25,
+      "total_amount": 525,
+      "delivery_address": "Mansoura, El-Gomhoria Street",
+      "delivery_lat": 31.0409,
+      "delivery_lng": 31.3785,
+      "delivery_notes": "Call before delivery",
+      "created_at": "2026-09-21T10:00:00.000Z",
+      "updated_at": "2026-09-21T10:00:00.000Z",
+      "delivered_at": null,
+      "items": [],
+      "shippingZone": {
+        "id": 1,
+        "name": "Mansoura",
+        "shipping_cost": 25,
+        "is_active": true,
+        "display_order": 1,
+        "created_at": "2026-09-19T10:00:00.000Z",
+        "updated_at": "2026-09-19T10:00:00.000Z"
+      }
+    }
+  ]
+}
+```
+
+## 3. Get One Order Details
+
+**Endpoint:** `GET /order/:id`
+
+Returns one order only when the order belongs to the authenticated client. The server checks both the order ID and the JWT user ID. If the order belongs to another user, the response is `404 Order not found`.
+
+### Example Request
+
+```http
+GET /order/42
+Authorization: Bearer <client-token>
+```
+
+### Success Response — 200 OK
+
+The response uses the same order shape as `GET /order`, but contains one object instead of an array.
+
+```json
+{
+  "message": "Success",
+  "data": {
+    "id": 42,
+    "user_id": 7,
+    "status": "PENDING",
+    "payment_method": "CASH",
+    "payment_status": "PENDING",
+    "subtotal": 500,
+    "discount_amount": 0,
+    "shipping_fee": 25,
+    "total_amount": 525,
+    "delivery_address": "Mansoura, El-Gomhoria Street",
+    "items": [],
+    "shippingZone": {}
+  }
+}
+```
+
+### Errors
+
+- `404 Not Found`: `Order not found` when the order does not exist or belongs to another client.
+
+## 4. Cancel My Order
+
+**Endpoint:** `PATCH /order/:id/cancel`
+
+Cancels the authenticated client's own order by changing its status to `CLIENTCANCELLED`.
+
+The client can cancel only within 48 hours after `created_at`. No request body is required.
+
+### Example Request
+
+```http
+PATCH /order/42/cancel
+Authorization: Bearer <client-token>
+```
+
+### Success Response — 200 OK
+
+```json
+{
+  "message": "Success",
+  "data": {
+    "id": 42,
+    "user_id": 7,
+    "status": "CLIENTCANCELLED",
+    "payment_method": "CASH",
+    "payment_status": "PENDING",
+    "subtotal": 500,
+    "discount_amount": 0,
+    "shipping_fee": 25,
+    "total_amount": 525,
+    "delivery_address": "Mansoura, El-Gomhoria Street",
+    "items": [],
+    "shippingZone": {}
+  }
+}
+```
+
+### Errors
+
+- `404 Not Found`: `Order not found` when the order does not belong to the authenticated client.
+- `409 Conflict`: `Orders can only be cancelled within 48 hours of creation`.
+- `409 Conflict`: `Order is already cancelled`.
+
+## Flutter Usage Examples
+
+```dart
+Future<List<Map<String, dynamic>>> getMyOrders() async {
+  final token = await getToken();
+
+  final response = await http.get(
+    Uri.parse('$baseUrl/order'),
+    headers: {
+      'Authorization': 'Bearer $token',
+      'Content-Type': 'application/json',
+    },
+  );
+
+  if (response.statusCode == 200) {
+    final body = jsonDecode(response.body) as Map<String, dynamic>;
+    return List<Map<String, dynamic>>.from(body['data']);
+  }
+
+  throw Exception('Failed to load orders');
+}
+
+Future<Map<String, dynamic>> getMyOrder(int orderId) async {
+  final token = await getToken();
+
+  final response = await http.get(
+    Uri.parse('$baseUrl/order/$orderId'),
+    headers: {'Authorization': 'Bearer $token'},
+  );
+
+  if (response.statusCode == 200) {
+    final body = jsonDecode(response.body) as Map<String, dynamic>;
+    return Map<String, dynamic>.from(body['data']);
+  }
+
+  throw Exception('Order not found');
+}
+
+Future<Map<String, dynamic>> cancelMyOrder(int orderId) async {
+  final token = await getToken();
+
+  final response = await http.patch(
+    Uri.parse('$baseUrl/order/$orderId/cancel'),
+    headers: {'Authorization': 'Bearer $token'},
+  );
+
+  if (response.statusCode == 200) {
+    final body = jsonDecode(response.body) as Map<String, dynamic>;
+    return Map<String, dynamic>.from(body['data']);
+  }
+
+  final body = jsonDecode(response.body);
+  throw Exception(body['message'] ?? 'Failed to cancel order');
+}
+```

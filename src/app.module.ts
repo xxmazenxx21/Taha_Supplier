@@ -15,6 +15,9 @@ import { CartModule } from './cart/cart.module';
 import { CouponModule } from './coupon/coupon.module';
 import { SubCategoryModule } from './sub-category/sub-category.module';
 import { ReviewModule } from './review/review.module';
+import { ShippingZoneModule } from './shipping-zone/shipping-zone.module';
+import { OrderModule } from './order/order.module';
+import { BannerModule } from './banner/banner.module';
 
 @Module({
   imports: [
@@ -37,6 +40,9 @@ import { ReviewModule } from './review/review.module';
     CouponModule,
     SubCategoryModule,
     ReviewModule,
+    ShippingZoneModule,
+    OrderModule,
+    BannerModule,
   ],
   controllers: [AppController],
   providers: [

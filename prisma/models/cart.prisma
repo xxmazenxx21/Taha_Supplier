@@ -3,9 +3,11 @@ model Cart {
   user_id    Int      @unique
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
+  coupon_id  Int?
 
-  user  User       @relation(fields: [user_id], references: [id], onDelete: Cascade)
-  items CartItem[]
+  user   User       @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  coupon Coupon?    @relation(fields: [coupon_id], references: [id], onDelete: SetNull)
+  items  CartItem[]
 }
 
 model CartItem {

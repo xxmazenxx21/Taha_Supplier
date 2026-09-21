@@ -1,0 +1,264 @@
+REVIEW MODULE DOCUMENTATION
+
+Base URL
+- http://localhost:3000
+
+This document is for Flutter app usage.
+It covers the review endpoints currently implemented in the backend.
+
+AUTH + ROLE RULES
+The app user role is:
+- CLIENT
+
+All review operations require a valid authenticated client user token.
+Use this header:
+- Authorization: Bearer <token>
+
+Important rules:
+- Only CLIENT users can create, update, or delete reviews.
+- The server reads the user id from the token automatically.
+- If the token is missing or invalid, the API returns 401 Unauthorized.
+- If the user is not a CLIENT, the API returns 403 Forbidden.
+
+IMPORTANT: RESPONSE SHAPE
+All successful responses are wrapped by the global interceptor.
+So every success response looks like:
+{
+  "message": "Success",
+  "data": { ...actual payload... }
+}
+
+Errors still use the Nest default format:
+{
+  "message": "Something went wrong",
+  "error": "Bad Request",
+  "statusCode": 400
+}
+
+CURRENT REVIEW API STATUS
+There are currently no GET /review endpoints implemented.
+The review module currently supports only:
+- POST /review/:productId
+- PATCH /review/:productId/:reviewId
+- DELETE /review/:productId/:reviewId
+
+1) CREATE REVIEW
+
+A) POST /review/:productId
+Purpose:
+- Create a review for a product.
+- The authenticated user is automatically assigned as the review author.
+- The backend also updates the product's aggregated rating and review_count in the same transaction.
+
+Access:
+- Protected route
+- Requires CLIENT role
+
+Example request:
+POST /review/12
+Authorization: Bearer <token>
+Content-Type: application/json
+
+Request body:
+{
+  "rating": 5,
+  "comment": "Amazing product!"
+}
+
+Validations:
+- rating is required
+- rating must be between 1 and 5
+- comment is optional but if provided it must be at least 1 character
+
+Example success response:
+{
+  "message": "Success",
+  "data": {
+    "id": 1,
+    "product_id": 12,
+    "user_id": 4,
+    "rating": 5,
+    "comment": "Amazing product!",
+    "created_at": "2026-09-19T00:00:00.000Z",
+    "updated_at": "2026-09-19T00:00:00.000Z",
+    "product": {
+      "id": 12,
+      "name": "Samsung Galaxy S24",
+      "price": 999.99,
+      "rating": 5,
+      "review_count": 1
+    },
+    "user": {
+      "id": 4,
+      "name": "John Doe",
+      "email": "john@example.com",
+      "phone": "1234567890"
+    }
+  }
+}
+
+Possible errors:
+1) Duplicate review by same user for same product
+{
+  "message": "A review for this product by this user already exists",
+  "error": "Bad Request",
+  "statusCode": 400
+}
+
+2) Product or user does not exist
+{
+  "message": "Product or user does not exist",
+  "error": "Bad Request",
+  "statusCode": 400
+}
+
+Flutter usage:
+- Use this when the user submits a rating and optional comment on a product detail screen.
+- This endpoint is the main one for writing reviews.
+- The backend automatically updates the product totals, so the app does not need to recalculate rating on the client.
+
+2) UPDATE REVIEW
+
+A) PATCH /review/:productId/:reviewId
+Purpose:
+- Update a review created by the currently authenticated user.
+- The server checks that the review belongs to the logged-in user before allowing modification.
+- Product rating and review count are recalculated automatically.
+
+Access:
+- Protected route
+- Requires CLIENT role
+
+Example request:
+PATCH /review/12/1
+Authorization: Bearer <token>
+Content-Type: application/json
+
+Request body:
+{
+  "rating": 4,
+  "comment": "Changed my mind, it's good but not perfect."
+}
+
+Validations:
+- rating is optional, but if present it must be between 1 and 5
+- comment is optional, but if present it must be at least 1 character
+
+Example success response:
+{
+  "message": "Success",
+  "data": {
+    "id": 1,
+    "product_id": 12,
+    "user_id": 4,
+    "rating": 4,
+    "comment": "Changed my mind, it's good but not perfect.",
+    "created_at": "2026-09-19T00:00:00.000Z",
+    "updated_at": "2026-09-21T10:20:00.000Z",
+    "product": {
+      "id": 12,
+      "name": "Samsung Galaxy S24"
+    },
+    "user": {
+      "id": 4,
+      "name": "John Doe"
+    }
+  }
+}
+
+Possible errors:
+1) Review not found
+{
+  "message": "Review not found",
+  "error": "Not Found",
+  "statusCode": 404
+}
+
+2) User tries to edit someone else's review
+{
+  "message": "You can only modify your own reviews",
+  "error": "Forbidden",
+  "statusCode": 403
+}
+
+Flutter usage:
+- Use this when the user edits their own review from the product review section.
+- You should send the product id and review id from the selected review item.
+
+3) DELETE REVIEW
+
+A) DELETE /review/:productId/:reviewId
+Purpose:
+- Delete a review owned by the logged-in user.
+- The backend verifies ownership before deleting.
+- Product rating and review_count are recalculated after removal.
+
+Access:
+- Protected route
+- Requires CLIENT role
+
+Example request:
+DELETE /review/12/1
+Authorization: Bearer <token>
+
+Example success response:
+{
+  "message": "Success",
+  "data": {
+    "id": 1,
+    "product_id": 12,
+    "user_id": 4,
+    "rating": 5,
+    "comment": "Amazing product!",
+    "created_at": "2026-09-19T00:00:00.000Z",
+    "updated_at": "2026-09-19T00:00:00.000Z",
+    "product": {
+      "id": 12,
+      "name": "Samsung Galaxy S24"
+    },
+    "user": {
+      "id": 4,
+      "name": "John Doe"
+    }
+  }
+}
+
+Possible errors:
+1) Review not found
+{
+  "message": "Review not found",
+  "error": "Not Found",
+  "statusCode": 404
+}
+
+2) User tries to delete someone else's review
+{
+  "message": "You can only delete your own reviews",
+  "error": "Forbidden",
+  "statusCode": 403
+}
+
+Flutter usage:
+- Use this when user removes a review they previously submitted.
+- Do not allow deletion of reviews that belong to another user.
+
+RECOMMENDED FLUTTER FLOW
+1. Product detail screen
+   - User opens a product
+   - Show product rating, review count, and review list if available on the product detail payload
+
+2. User adds or edits a review
+   - POST /review/:productId for new reviews
+   - PATCH /review/:productId/:reviewId for edits
+
+3. User removes a review
+   - DELETE /review/:productId/:reviewId
+
+4. Refresh the product UI
+   - After mutation, reload the product detail or refetch the product list with the updated rating values
+
+IMPORTANT NOTES
+- There is currently no public list endpoint for all reviews.
+- Review values are stored per product and user, and each user can only submit one review per product.
+- The product's rating is recalculated server-side after each create/update/delete action.
+- The app should treat review operations as user-owned actions and enforce ownership in the UI as well.

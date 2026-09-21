@@ -1,46 +1,52 @@
 import { Type } from 'class-transformer';
-import { IsString, IsEnum, IsNumber, IsOptional, IsInt, IsDateString } from 'class-validator';
-
-export enum DiscountTypeDto {
-	PERCENTAGE = 'PERCENTAGE',
-	FIXED = 'FIXED',
-}
+import {
+  IsString,
+  IsNumber,
+  IsOptional,
+  IsInt,
+  IsDateString,
+  IsEnum,
+  Min,
+  Max,
+} from 'class-validator';
 
 export enum CouponStatusDto {
-	ACTIVE = 'ACTIVE',
-	PAUSED = 'PAUSED',
+  ACTIVE = 'ACTIVE',
+  PAUSED = 'PAUSED',
 }
 
 export class CreateCouponDto {
-	@IsString()
-	code: string;
+  @IsString()
+  code: string;
 
-	@IsEnum(DiscountTypeDto)
-	discount_type: DiscountTypeDto;
+  /**
+   * Percentage discount value (1 – 100)
+   */
+  @Type(() => Number)
+  @IsNumber()
+  @Min(1)
+  @Max(100)
+  discount_value: number;
 
-	@Type(() => Number)
-	@IsNumber()
-	discount_value: number;
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  min_order_amount?: number;
 
-	@IsOptional()
-	@Type(() => Number)
-	@IsNumber()
-	min_order_amount?: number;
+  @IsOptional()
+  @IsDateString()
+  start_date?: string;
 
-	@IsOptional()
-	@IsDateString()
-	start_date?: string;
+  @IsOptional()
+  @IsDateString()
+  end_date?: string;
 
-	@IsOptional()
-	@IsDateString()
-	end_date?: string;
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  usage_limit?: number;
 
-	@IsOptional()
-	@Type(() => Number)
-	@IsInt()
-	usage_limit?: number;
-
-	@IsOptional()
-	@IsEnum(CouponStatusDto)
-	status?: CouponStatusDto;
+  @IsOptional()
+  @IsEnum(CouponStatusDto)
+  status?: CouponStatusDto;
 }

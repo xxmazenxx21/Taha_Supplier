@@ -1,0 +1,508 @@
+# AI Architecture and Project Context Guide
+
+IMPORTANT:
+This file is the AI project context and architectural guide.
+
+It provides the intended architecture, business rules, database structure,
+conventions, and constraints to help AI agents navigate the repository.
+
+However, the actual source code and Prisma schema are the final source of truth
+when implementation details conflict with this document.
+
+AI agents should read this file first, then inspect the relevant source files
+before making changes.
+
+
+## 1. Project Overview
+**Project Name**: Taha Supplier
+**Purpose**: An e-commerce / B2B supplier platform allowing users to browse products, manage carts, apply coupons, and place orders. 
+**Main Users**: Clients (cafe owners, users), Admins, Delivery personnel, Orders Staff, Accounts Staff, Support.
+**Development State**: Actively under development. Core catalog, cart, and coupon logic is implemented. **The Order flow is currently defined in the schema but its module logic (controllers/services) is PENDING/FUTURE WORK.**
+
+---
+
+## 2. Technology Stack
+- **Runtime**: Node.js
+- **Language**: TypeScript
+- **Framework**: NestJS (v11)
+- **ORM**: Prisma (v7)
+- **Database**: PostgreSQL
+- **Authentication**: JWT, bcrypt for password hashing
+- **Validation**: `class-validator`, `class-transformer`
+- **File Storage**: Local file system (via `multer`)
+- **Formatting**: Prettier, ESLint
+
+---
+
+## 3. Architecture
+The project follows a standard layered NestJS architecture:
+```text
+Request
+  ↓
+Controller (Route definitions, param extraction)
+  ↓
+DTO / Validation (class-validator pipes)
+  ↓
+Guard (AuthGuard + RolesGuard)
+  ↓
+Service (Business logic, Prisma interactions, Decimal math)
+  ↓
+Prisma ORM
+  ↓
+PostgreSQL
+```
+- **Interceptors**: Uses a global `ResponseInterceptor` to wrap all responses in a standard format: `{ "message": "...", "data": ... }`.
+- **Validation Pipe**: Global `ValidationPipe` is enabled with `whitelist: true`, `forbidNonWhitelisted: true`, and `transform: true`.
+- **Dependency Injection**: Services are injected into controllers via standard NestJS patterns.
+- **Database Access**: Handled centrally by `PrismaService`.
+
+---
+
+## 4. Repository Structure
+```text
+src/
+  auth/           → Authentication, login, signup logic
+  brand/          → Brand management
+  cart/           → Cart management & dynamic coupon logic
+  category/       → Main categories
+  coupon/         → Admin coupon management
+  decorators/     → Custom decorators (e.g., @Roles, @Public)
+  guards/         → Auth and role guards
+  interceptors/   → Global response formatter
+  prisma/         → Prisma module/service
+  product/        → Products, images, filtering, and search
+  review/         → Product reviews
+  shipping-zone/  → Shipping zones and costs
+  sub-category/   → Sub-categories (linked to Category and Brand)
+  utils/multer/   → File upload logic and disk storage constraints
+
+prisma/
+  schema.prisma   → Main Prisma file
+  models/         → Splitted Prisma schemas (merged to schema.prisma)
+```
+
+---
+
+## 5. Database Schema — COMPLETE
+
+### User
+Purpose: Represents an application user.
+Fields:
+- `id`: Int, PK, auto-increment
+- `role`: UserRole
+- `name`: String
+- `shop_name`: String? (for CLIENT only)
+- `phone`: String, unique
+- `email`: String?, unique
+- `password`: String
+- `address`: String?
+- `latitude`: Decimal?
+- `longitude`: Decimal?
+- `status`: UserStatus, default ACTIVE
+- `block_reason`: String?
+- `created_at`: DateTime, default now()
+- `updated_at`: DateTime
+Relationships: One-to-one to `Cart`, One-to-many to `CouponUsage`, `Review`, `Order`.
+
+### Category
+Purpose: Top-level catalog grouping.
+Fields:
+- `id`: Int, PK
+- `name`: String, unique
+- `image`: String
+- `display_order`: Int, default 0
+- `is_hidden`: Boolean, default false
+- `created_at`: DateTime
+- `updated_at`: DateTime
+Relationships: One-to-many to `SubCategory`.
+
+### SubCategory
+Purpose: Second-level catalog grouping under a Category.
+Fields:
+- `id`: Int, PK
+- `name`: String
+- `display_order`: Int, default 0
+- `image`: String?
+- `category_id`: Int, FK to Category
+- `is_hidden`: Boolean, default false
+- `created_at`: DateTime
+Relationships: Many-to-one to `Category`, One-to-many to `Product`, `BrandSubCategory`.
+
+### Brand
+Purpose: Represents product brands.
+Fields:
+- `id`: Int, PK
+- `name`: String, unique
+- `logo`: String
+- `display_order`: Int, default 0
+- `is_hidden`: Boolean, default false
+- `created_at`: DateTime
+- `updated_at`: DateTime
+Relationships: One-to-many to `Product`, `BrandSubCategory`.
+
+### BrandSubCategory
+Purpose: Many-to-many join table linking Brands and SubCategories.
+Fields:
+- `id`: Int, PK
+- `brand_id`: Int, FK to Brand
+- `subcategory_id`: Int, FK to SubCategory
+Constraints: `@@unique([brand_id, subcategory_id])`
+
+### Product
+Purpose: Main catalog item.
+Fields:
+- `id`: Int, PK
+- `subcategory_id`: Int, FK to SubCategory
+- `brand_id`: Int, FK to Brand
+- `name`: String
+- `description`: String (Text)
+- `image`: String
+- `price`: Decimal (10, 2)
+- `discount_price`: Decimal? (10, 2)
+- `discount_percentage`: Decimal? (5, 2)
+- `rating`: Decimal (3, 2), default 0
+- `review_count`: Int, default 0
+- `is_best_seller`: Boolean, default false
+- `is_new`: Boolean, default false
+- `unit`: String
+- `is_available`: Boolean, default true
+- `display_order`: Int, default 0
+- `created_at`: DateTime
+- `updated_at`: DateTime
+Relationships: One-to-many to `ProductImage`, `CartItem`, `Review`, `OrderItem`.
+
+### ProductImage
+Purpose: Gallery images for a Product.
+Fields:
+- `id`: Int, PK
+- `product_id`: Int, FK to Product (Cascade delete)
+- `image_url`: String
+- `display_order`: Int, default 0
+- `created_at`: DateTime
+
+### Review
+Purpose: User reviews on products.
+Fields:
+- `id`: Int, PK
+- `product_id`: Int, FK to Product (Cascade delete)
+- `user_id`: Int, FK to User (Cascade delete)
+- `rating`: Int
+- `comment`: String? (Text)
+- `created_at`: DateTime
+- `updated_at`: DateTime
+Constraints: `@@unique([product_id, user_id])`
+
+### ShippingZone
+Purpose: Delivery zones and costs.
+Fields:
+- `id`: Int, PK
+- `name`: String, unique
+- `shipping_cost`: Decimal (10, 2)
+- `is_active`: Boolean, default true
+- `display_order`: Int, default 0
+- `created_at`: DateTime
+- `updated_at`: DateTime
+Relationships: One-to-many to `Order`.
+
+### Cart
+Purpose: Shopping cart for a user.
+Fields:
+- `id`: Int, PK
+- `user_id`: Int, unique, FK to User (Cascade delete)
+- `created_at`: DateTime
+- `updated_at`: DateTime
+- `coupon_id`: Int?, FK to Coupon (SetNull delete)
+Relationships: One-to-one to `User`, One-to-many to `CartItem`, Many-to-one to `Coupon`.
+
+### CartItem
+Purpose: Items within a Cart.
+Fields:
+- `id`: Int, PK
+- `cart_id`: Int, FK to Cart (Cascade delete)
+- `product_id`: Int, FK to Product (Cascade delete)
+- `quantity`: Int, default 1
+- `created_at`: DateTime
+- `updated_at`: DateTime
+Constraints: `@@unique([cart_id, product_id])`
+
+### Coupon
+Purpose: Percentage discount coupons.
+Fields:
+- `id`: Int, PK
+- `code`: String, unique
+- `discount_value`: Decimal (10, 2)
+- `min_order_amount`: Decimal? (10, 2)
+- `start_date`: DateTime?
+- `end_date`: DateTime?
+- `usage_limit`: Int?
+- `usage_count`: Int, default 0
+- `status`: CouponStatus, default ACTIVE
+- `created_at`: DateTime
+Relationships: One-to-many to `CouponUsage`, `Order`, `Cart`.
+
+### CouponUsage
+Purpose: Tracks which users used which coupon on which order.
+Fields:
+- `id`: Int, PK
+- `coupon_id`: Int, FK to Coupon
+- `user_id`: Int, FK to User
+- `order_id`: Int?, unique, FK to Order
+- `used_at`: DateTime, default now()
+Constraints: `@@unique([coupon_id, user_id])`
+
+### Order
+Purpose: Placed order record.
+Fields:
+- `id`: Int, PK
+- `user_id`: Int, FK to User
+- `coupon_id`: Int?, FK to Coupon
+- `shipping_zone_id`: Int, FK to ShippingZone
+- `status`: OrderStatus, default PENDING
+- `payment_method`: PaymentMethod
+- `payment_status`: PaymentStatus, default PENDING
+- `payment_proof_image`: String?
+- `subtotal`: Decimal (10, 2)
+- `discount_amount`: Decimal (10, 2), default 0
+- `shipping_fee`: Decimal (10, 2)
+- `total_amount`: Decimal (10, 2)
+- `delivery_address`: String
+- `delivery_lat`: Decimal? (10, 7)
+- `delivery_lng`: Decimal? (10, 7)
+- `delivery_notes`: String?
+- `created_at`: DateTime
+- `updated_at`: DateTime
+- `delivered_at`: DateTime?
+Relationships: One-to-many to `OrderItem`, One-to-one to `CouponUsage`.
+
+### OrderItem
+Purpose: Snapshot of items in an order.
+Fields:
+- `id`: Int, PK
+- `order_id`: Int, FK to Order (Cascade delete)
+- `product_id`: Int, FK to Product
+- `quantity`: Int
+- `unit_price`: Decimal (10, 2)
+- `total_price`: Decimal (10, 2)
+- `product_name`: String
+- `product_unit`: String
+
+---
+
+## 6. Database Relationships
+
+```text
+User
+ ├── 1 : 1 → Cart
+ ├── 1 : N → Orders
+ ├── 1 : N → Reviews
+ └── 1 : N → CouponUsage
+
+Category
+ └── 1 : N → SubCategory
+
+SubCategory
+ ├── N : 1 → Category
+ ├── 1 : N → Product
+ └── 1 : N → BrandSubCategory
+
+Brand
+ ├── 1 : N → Product
+ └── 1 : N → BrandSubCategory
+
+Product
+ ├── N : 1 → SubCategory
+ ├── N : 1 → Brand
+ ├── 1 : N → ProductImage
+ ├── 1 : N → Review
+ ├── 1 : N → CartItem
+ └── 1 : N → OrderItem
+
+Cart
+ ├── 1 : 1 → User
+ ├── N : 1 → Coupon
+ └── 1 : N → CartItem
+
+Coupon
+ ├── 1 : N → Cart
+ ├── 1 : N → Order
+ └── 1 : N → CouponUsage
+
+Order
+ ├── N : 1 → User
+ ├── N : 1 → Coupon
+ ├── N : 1 → ShippingZone
+ ├── 1 : N → OrderItem
+ └── 1 : 1 → CouponUsage
+```
+
+---
+
+## 7. Enums
+
+**UserRole**
+- `CLIENT`: Standard customer (cafe owner).
+- `ADMIN`: Full system access.
+- `DELIVERY`: Driver.
+- `ORDERS_STAFF`: Manages order processing.
+- `ACCOUNTS_STAFF`: Manages payments.
+- `SUPPORT`: Customer service.
+
+**UserStatus**
+- `ACTIVE`: Normal user.
+- `BANNED`: Prevented from using the app.
+
+**CouponStatus**
+- `ACTIVE`: Can be used.
+- `PAUSED`: Temporarily disabled.
+
+**OrderStatus**
+- `PENDING`: Placed, waiting for review.
+- `CONFIRMED`: Approved by staff.
+- `PROCESSING`: Being prepared.
+- `SHIPPED`: Out for delivery.
+- `DELIVERED`: Completed.
+- `CANCELLED`: Aborted.
+
+**PaymentMethod**
+- `CASH`: Paid on delivery.
+- `CARD`: Manual bank transfer (client uploads receipt image).
+
+**PaymentStatus**
+- `PENDING`: Not verified / collected.
+- `APPROVED`: Admin approved transfer image.
+- `REJECTED`: Admin rejected transfer image.
+
+---
+
+## 8. Roles and Authorization
+- **Authentication**: JWT validation using `AuthGuard`. Current user is placed in `req.user`.
+- **Authorization**: Route-level restrictions via `@Roles(UserRole.ADMIN, ...)` using `RolesGuard`.
+- **Public Routes**: Bypasses AuthGuard using `@Public()` decorator.
+
+---
+
+## 9. Authentication
+- Flow: Email/Phone & Password based login. 
+- Tokens: JWT tokens signed indefinitely (`3650d` expiry). No refresh token mechanism.
+- Passwords: Hashed using `bcrypt`.
+- Controllers have distinct login/signup for `CLIENT` vs Admin Dashboard.
+
+---
+
+## 10. API Conventions
+- **Responses**: Every response is wrapped in `{ "message": "Success", "data": ... }`. (Unless only `message` is returned, then `data` is `null`).
+- **Validation**: Strict. Extra payload fields are stripped/rejected automatically.
+- **Sorting/Pagination**: Standardized in DTOs (e.g. `page`, `per_page`, `sort`, `search`). Returned payload includes `{ items, page, per_page, next_page, last_page, total }`.
+- **Soft Delete**: Many entities (like Product) use `is_available = false` or `is_hidden = true` instead of true deletion.
+
+---
+
+## 11. Validation Rules
+- Handled at DTO level using `class-validator` (e.g., `@IsString()`, `@IsNumber()`).
+- File uploads: Rejection happens *twice*: once via Multer limits/fileFilter, and again via manual `validateImageFiles` helper. Max 10MB per image, only `jpeg, jpg, png, webp`.
+
+---
+
+## 12. Business Rules
+- **Product Pricing**: `effective_price = discount_price ?? price`.
+- **Cart Calculations**: Cart totals are purely dynamic. The `Cart` table only stores items and an attached `coupon_id`. Totals are calculated on-the-fly and returned in the API.
+- **Product Visibility**: Products are hidden if `is_available = false`, OR if their parent SubCategory is hidden (`is_hidden = true`).
+
+---
+
+## 13. Coupon Rules
+- **Percentage Only**: There are no fixed discount coupons. `discount_value` represents a percentage (e.g., 10 means 10%).
+- **Cart Attachment**: A single cart can have ONE coupon attached. Applying a new one replaces the old.
+- **Live Revalidation**: The Cart module constantly re-verifies the attached coupon (checking ACTIVE status, start/end date, usage limit, min order amount, and prior usage). If it fails, the discount drops to 0, and `coupon_valid: false` is returned. **The coupon is NOT un-attached from the DB automatically**.
+- **No Consumption on Apply**: Applying a coupon does NOT create a `CouponUsage` record. That happens at Order time.
+- **Unique usage**: A user can only use a specific coupon once (`@@unique([coupon_id, user_id])` on `CouponUsage`).
+
+---
+
+## 14. Cart Rules
+- One `Cart` per User (auto-created on demand).
+- Merges duplicates: Adding a product already in the cart increments `quantity`.
+- Calculations use `Prisma.Decimal` strictly under the hood.
+
+---
+
+## 15. Order Rules (UNKNOWN / PENDING)
+*Note: The `src/order` module is not yet implemented. The rules below describe intended schema behavior.*
+- Order totals (`subtotal`, `shipping_fee`, `total_amount`) and Item prices (`unit_price`) are snapshotted in `Order` and `OrderItem`.
+- Bank transfers (`CARD` payment) require a manual photo upload (`payment_proof_image`) which an admin must review.
+- Creating an order will likely consume the coupon by inserting into `CouponUsage`.
+
+---
+
+## 16. Monetary Rules
+- **Internal Math**: All monetary logic (cart subtotals, coupon math) MUST use `Prisma.Decimal` (e.g., `.mul()`, `.add()`, `.sub()`). Do NOT use floating point math (`parseFloat`).
+- **API Response**: Round Decimal results to the nearest integer (`Math.round()`) and cast to `Number` right before returning the JSON response. Do not send stringified Decimals.
+- Currency is implicitly EGP.
+
+---
+
+## 17. Images and File Uploads
+- Stored locally on disk in `/uploads/<folder>/<uuid>.ext`.
+- Constants defined in `src/utils/multer/upload-paths.ts`.
+- Endpoints returning images usually map their public URL (`/uploads/...`).
+- When replacing/deleting images, local files are deleted using `fs.unlink`.
+
+---
+
+## 18. Important Workflows
+### Cart & Coupon Flow
+```text
+User adds item (quantity merged if exists)
+ ↓
+User applies coupon (calculates subtotal, checks min amount/usage limits)
+ ↓
+Cart saved with coupon_id
+ ↓
+User requests cart
+ ↓
+Cart re-evaluates coupon LIVE (without side effects)
+ ↓
+Rounds values -> Returns JSON payload
+```
+
+---
+
+## 19. Important Architectural Decisions
+- Cart totals are NEVER saved in the database.
+- Products do not have cascade deletion for orders; they use snapshots.
+- A user denied a coupon dynamically will still have that `coupon_id` attached to their cart so they can fix their cart (e.g. increase quantity to meet min order amount) rather than having to retype the code.
+
+---
+
+## 20. AI Coding Rules
+1. **DO NOT invent fields, routes, or modules**.
+2. **DO NOT change the Prisma schema** unless explicitly instructed.
+3. **DO NOT touch Order creation logic** (it is pending a separate review).
+4. Use `Prisma.Decimal` for all internal money logic.
+5. Apply the `Math.round()` policy to monetary values in API responses.
+6. When calculating `effective_price`, always prioritize `discount_price` over `price`.
+7. Adhere strictly to the `{ message, data }` response structure via controllers. Do not build this structure inside services.
+8. Validate files using the project's custom `multerOptions` and `validateImageFiles` helpers.
+9. Verify role restrictions with `@Roles` and `@Public`.
+
+---
+
+## 21. Common Pitfalls / Things AI Must Watch
+- **Decimal arithmetic**: Do not accidentally cast Prisma Decimals to JavaScript floats before doing arithmetic.
+- **Stale Cart Data**: Remember that `cart.coupon` could become invalid immediately after being applied (e.g., if it hits its expiration date 1 minute later). You must always do Live Revalidation.
+- **Image Deletion**: Use the swallowed-error pattern (`fs.unlink().catch()`) so missing images on disk don't crash the server.
+
+---
+
+## 22. Known TODOs / Future Work
+- **PENDING / VERIFY IN SOURCE**: The complete `Order` flow (creation, item snapshots, coupon consumption race-conditions).
+- **PENDING**: Payment gateway integration is not planned; it relies on manual cash or uploaded images.
+
+---
+
+## 23. Source of Truth
+- **Database structure**: `prisma/schema.prisma` and `prisma/models/*.prisma`
+- **Validation constraints**: `src/**/*.dto.ts`
+- **Business Logic**: `src/**/*.service.ts`
+- **Auth/Roles**: `src/guards/*.ts`
+- **Uploads**: `src/utils/multer/*`

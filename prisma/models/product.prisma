@@ -23,6 +23,7 @@ model Product {
   images      ProductImage[]
   cart_items  CartItem[]
   reviews     Review[]
+  order_items OrderItem[]
 }
 
 model ProductImage {

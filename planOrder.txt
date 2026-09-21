@@ -1,0 +1,315 @@
+# Order Flow Plan (Taha Supplier)
+
+## 1. Input Requirements
+The client submits a request to place an order.
+
+**Request Body Payload:**
+- `shipping_zone_id` (Number, required)
+- `payment_method` (Enum: CASH | CARD, required)
+- `payment_proof_image` (String, conditionally required if payment_method === 'CARD')
+- `delivery_address` (String, required)
+- `delivery_lat` (Decimal, optional)
+- `delivery_lng` (Decimal, optional)
+- `delivery_notes` (String, optional)
+
+**Validation:**
+- If `payment_method` is `CARD` and `payment_proof_image` is missing, throw a `BadRequestException`.
+- Any validation that depends on current database state must happen only after beginning the transaction and re-fetching the current state from the database.
+
+## 2. Transaction and Concurrency Strategy
+The entire checkout decision must occur inside a single Prisma database transaction. This is the critical execution boundary for the order placement workflow.
+
+- The transaction must include all reads and writes that can change concurrently:
+  - Cart + CartItems
+  - Products
+  - Coupon
+  - ShippingZone
+  - Order
+  - OrderItems
+  - CouponUsage
+  - Cart item clearing + coupon detachment
+- The transaction must use a strong isolation strategy appropriate for PostgreSQL, such as `Prisma.TransactionIsolationLevel.Serializable`, with retry handling for serialization failures.
+- This prevents checkout from operating on stale data and prevents accidental cart mutation loss during concurrent changes.
+
+### Concurrency concern: cart mutation during checkout
+The plan must explicitly account for this race condition:
+
+```text
+Request A → begins checkout, reads cart
+Request B → adds new item to cart while A is still processing
+Request A → clears cart after ordering
+```
+
+If Request A reads the cart before Request B adds its item, and then clears cart rows without row-level consistency protection, it may accidentally delete the newly added item that belonged to another concurrent operation.
+
+The solution is to run the full checkout workflow inside a transaction using `Serializable` isolation where appropriate, and to re-read the current cart state from the database within that transaction instead of trusting any pre-transaction snapshot.
+
+This ensures the order is created from a consistent database state and the cart clearing step only removes items from the cart state that belongs to this checkout operation.
+
+### End-to-end checkout transaction flow
+```text
+BEGIN TRANSACTION (Serializable)
+    ↓
+Fetch fresh Cart + CartItems + Products + Coupon
+    ↓
+Ensure cart is not empty
+    ↓
+Validate product availability against fresh DB state
+    ↓
+Calculate exact Decimal subtotal
+    ↓
+Fetch and validate ShippingZone from current DB state
+    ↓
+Revalidate attached Coupon from current DB state
+    ↓
+Atomically consume coupon usage if applicable
+    ↓
+Calculate exact Decimal final total
+    ↓
+Create Order
+    ↓
+Create OrderItems
+    ↓
+Create CouponUsage
+    ↓
+Clear CartItems
+    ↓
+Detach Coupon
+COMMIT
+```
+
+## 3. Verify Cart and Calculate Items
+*(Inside the Transaction)*
+- Fetch the user's current `Cart` and its `CartItem`s, including the related `Product` data, from the database inside the transaction.
+- Do not use any cart snapshot loaded before the transaction for final order validation.
+- Ensure the cart contains at least 1 item.
+- Re-verify product availability against fresh product rows inside the transaction.
+- If any product is unavailable, throw a `ConflictException` and abort the transaction.
+- Calculate the subtotal using `Prisma.Decimal` strictly.
+- For each cart item:
+  - snapshot the effective price as `product.discount_price ?? product.price`
+  - compute item total as `effective_price * quantity`
+  - add the item total into the subtotal
+- Do not cast Decimal values to JavaScript float before arithmetic.
+
+## 4. Verify Shipping Zone
+*(Inside the Transaction)*
+- Fetch the `ShippingZone` by `shipping_zone_id` again inside the transaction.
+- Validate that:
+  - the shipping zone exists
+  - the shipping zone is active
+  - the order should use the current `shipping_cost` from the database state
+- If the zone is missing or inactive, throw a `ConflictException`.
+- Extract `shipping_cost` as a `Prisma.Decimal` and keep it as the source value for the order.
+
+## 5. Revalidate Coupon
+*(Inside the Transaction)*
+- If the cart has a `coupon_id`, fetch the current coupon row inside the transaction.
+- Validate the coupon against the current database state, including:
+  - active status
+  - date boundaries
+  - minimum order amount
+  - whether the user has already consumed the coupon under current rules
+- This step is only a validation check to determine whether the coupon appears eligible at this moment.
+- This step does NOT guarantee the coupon can be consumed safely under concurrency.
+- The actual consumption must happen in the next step with an atomic conditional update.
+
+## 6. Atomically Consume Coupon
+*(Inside the Transaction)*
+This must be a concurrency-safe reservation step.
+
+The plan must explicitly prevent the race condition below:
+
+```text
+usage_limit = 10
+usage_count = 9
+
+Request A checks 9 < 10 → passes
+Request B checks 9 < 10 → passes
+Both increment
+Result → 11
+```
+
+The required approach is a conditional update:
+
+```sql
+UPDATE "Coupon"
+SET usage_count = usage_count + 1
+WHERE id = ?
+  AND (
+    usage_limit IS NULL
+    OR usage_count < usage_limit
+  )
+```
+
+Implementation requirements:
+- Run this update inside the transaction.
+- Verify that the update affected exactly one row.
+- If no row was updated, it means the usage limit was reached concurrently.
+- Throw a `ConflictException` and abort the transaction.
+
+Important rule:
+- A prior validation query like `if (coupon.usage_count < coupon.usage_limit)` is not sufficient by itself.
+- Validation and actual consumption are separate steps.
+- The validation check tells whether the coupon appears eligible.
+- The atomic conditional update is the actual concurrency-safe consumption step.
+
+## 7. Calculate Final Total
+*(Inside the Transaction)*
+- Calculate `discount_amount` based on the validated coupon percentage applied to the current `subtotal`.
+- Compute `total_amount = subtotal - discount_amount + shipping_fee`.
+- Keep all arithmetic in `Prisma.Decimal`.
+- Do not store rounded presentation values as the source-of-truth order amounts.
+- Persist the precise Decimal values in the database.
+
+## 8. Create Order
+*(Inside the Transaction)*
+- Insert the `Order` record using the current validated values.
+- Use the current `subtotal`, `discount_amount`, `shipping_fee`, and `total_amount` values from the just-computed checkout state.
+- Persist delivery details and `payment_proof_image` when applicable.
+- This write must be part of the same transaction as the coupon usage reservation and cart clearing.
+- If order creation fails, the entire transaction must roll back.
+
+## 9. Create OrderItems
+*(Inside the Transaction)*
+- Map the cart items to `OrderItem` records linked to the new `Order`.
+- Snapshot the values needed for the order at checkout time, such as:
+  - `product_name` (UNKNOWN / VERIFY IN SOURCE)
+  - `product_unit` (UNKNOWN / VERIFY IN SOURCE)
+  - `unit_price` (from effective price)
+  - `total_price` (effective price × quantity)
+- Ensure all inserted order items are created within the same transaction as the order itself.
+
+## 10. Create CouponUsage
+*(Inside the Transaction)*
+- If a coupon was valid and successfully consumed atomically, create the `CouponUsage` record linking the `user_id`, `coupon_id`, and `order_id`.
+- This is a critical transactional step.
+- `CouponUsage` creation, `Coupon.usage_count` increment, and `Order` creation must all happen inside the same transaction.
+- If any of these operations fails, the whole transaction must roll back.
+
+This requirement prevents invalid partial states such as:
+
+```text
+Order created
+BUT CouponUsage failed
+```
+
+or:
+
+```text
+CouponUsage created
+BUT Order failed
+```
+
+## 11. Clear Cart
+*(Inside the Transaction)*
+- Delete the user's `CartItem`s.
+- Detach the coupon from the cart (`coupon_id = null`).
+- This clearing step must happen only after the order and related records have been successfully created in the same transaction.
+- The cart should be cleared only after the checkout state is fully validated and committed in a single atomic operation.
+
+## 12. Commit / Rollback Behavior
+- The entire checkout process (steps 3 to 11) is a single atomic operation.
+- If any step fails, the transaction must rollback completely.
+- This includes:
+  - cart empty check failure
+  - product unavailable
+  - shipping zone invalid
+  - coupon invalid
+  - coupon consumption fails due to concurrency
+  - order creation failure
+  - order item creation failure
+  - coupon usage creation failure
+  - cart clear failure
+  - payment proof validation failure
+- No partial state should remain when the checkout fails.
+
+## 13. Response Formatting
+- Convert internal `Prisma.Decimal` monetary values back to rounded integers (`Math.round()`) only when formatting the API response.
+- Persist the exact Decimal values in the database.
+- Maintain the project's existing whole-EGP presentation convention when returning the response.
+- The response format must follow the current application convention: `{ message, data }`.
+
+## 14. Failure Scenarios
+- **Concurrent usage limit reached:** atomic coupon consumption fails because the conditional update updated zero rows → rollback → return `ConflictException`.
+- **Product becomes unavailable during checkout:** fresh product state reveals `is_available === false` inside transaction → rollback → return `ConflictException`.
+- **Shipping zone changed or becomes inactive:** fresh shipping zone lookup fails validation inside transaction → rollback → return `ConflictException`.
+- **Cart modified concurrently:** checkout reads current cart state inside transaction; serialization failure or stale-state conflict is retried or returned as conflict → rollback.
+- **Serialization failure:** concurrent transaction conflict occurs under `Serializable` isolation → retry transaction according to project retry policy or return a suitable conflict error.
+
+## 15. Coupon Consumption Policy on Order Failure / Cancellation
+This is a business decision that must be made explicitly.
+
+The current schema/requirements do not define the final policy for a coupon after it has been consumed but the order later fails, is cancelled, or remains pending.
+
+The plan must explicitly document the decision point:
+
+- Payment fails
+- Card payment proof is rejected
+- Order is cancelled
+- Order is rejected
+- Order remains pending
+
+**BUSINESS DECISION REQUIRED**
+
+At this point, the team must decide whether:
+- the coupon usage should be restored and the `CouponUsage` record removed/rolled back when the order is cancelled or rejected, or
+- the coupon should remain consumed permanently once the order is placed, even if the order later fails or is cancelled.
+
+This policy must be finalized before implementation because it affects both `CouponUsage` lifecycle and `Coupon.usage_count` behavior.
+
+## 16. Important Implementation Notes
+- The implementation must use the actual existing schema and project conventions.
+- Do not add new Prisma models or fields.
+- Do not invent payment providers, new order statuses, or unrelated cart logic.
+- Do not change the schema as part of this plan.
+- Use the existing project conventions and verify any schema-specific details with source before implementation.
+- If a required detail is not yet known from the existing schema, write: `UNKNOWN / VERIFY IN SOURCE` instead of guessing.
+- Keep `Prisma.Decimal` as the source-of-truth for internal arithmetic.
+- Use `$transaction` at the Prisma level and set `isolationLevel` to `Prisma.TransactionIsolationLevel.Serializable` where appropriate.
+- Follow the existing `{ message, data }` response pattern.
+
+## End-to-End Transaction Sequence
+```text
+Client sends place-order request
+    ↓
+Begin transaction (Serializable)
+    ↓
+Fetch current cart + cart items + products + coupon
+    ↓
+Validate cart is not empty
+    ↓
+Validate product availability against current DB state
+    ↓
+Calculate subtotal using Prisma.Decimal
+    ↓
+Fetch shipping zone using current DB state
+    ↓
+Validate shipping zone is active
+    ↓
+Validate coupon against current DB state
+    ↓
+Execute atomic coupon consumption update
+    ↓
+If update affected 0 rows: rollback and conflict
+    ↓
+Calculate discount and total_amount using Prisma.Decimal
+    ↓
+Create Order
+    ↓
+Create OrderItems
+    ↓
+Create CouponUsage
+    ↓
+Clear CartItems
+    ↓
+Detach Coupon from Cart
+    ↓
+Commit transaction
+    ↓
+Format monetary response values for API output
+    ↓
+Return { message, data }
+```
+
+This is the intended production-safe order placement plan: the decision is made on fresh database state, all critical actions occur inside the same transaction, and coupon consumption is protected from concurrency races.

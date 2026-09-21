@@ -5,6 +5,7 @@ import { Roles } from '../decorators/roles.decorator';
 import { CartService } from './cart.service';
 import { CreateCartItemDto } from './dto/create-cart-item.dto';
 import { UpdateCartItemDto } from './dto/update-cart-item.dto';
+import { ApplyCouponDto } from './dto/apply-coupon.dto';
 
 @Controller('cart')
 export class CartController {
@@ -45,5 +46,22 @@ export class CartController {
     @Param('id') id: string,
   ) {
     return this.cartService.removeItem(req.user.sub, +id);
+  }
+
+  @Post('apply-coupon')
+  @Roles(UserRole.CLIENT)
+  applyCoupon(
+    @Req() req: Request & { user: { sub: number; role: string } },
+    @Body() dto: ApplyCouponDto,
+  ) {
+    return this.cartService.applyCoupon(req.user.sub, dto.code);
+  }
+
+  @Post('remove-coupon')
+  @Roles(UserRole.CLIENT)
+  removeCoupon(
+    @Req() req: Request & { user: { sub: number; role: string } },
+  ) {
+    return this.cartService.removeCoupon(req.user.sub);
   }
 }
