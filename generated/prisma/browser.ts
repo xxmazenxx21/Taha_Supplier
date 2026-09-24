@@ -78,6 +78,11 @@ export type Product = Prisma.ProductModel
  */
 export type ProductImage = Prisma.ProductImageModel
 /**
+ * Model RefreshToken
+ * 
+ */
+export type RefreshToken = Prisma.RefreshTokenModel
+/**
  * Model Review
  * 
  */
@@ -102,3 +107,8 @@ export type BrandSubCategory = Prisma.BrandSubCategoryModel
  * 
  */
 export type User = Prisma.UserModel
+/**
+ * Model UserDevice
+ * 
+ */
+export type UserDevice = Prisma.UserDeviceModel

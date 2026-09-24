@@ -18,15 +18,16 @@ import { ReviewModule } from './review/review.module';
 import { ShippingZoneModule } from './shipping-zone/shipping-zone.module';
 import { OrderModule } from './order/order.module';
 import { BannerModule } from './banner/banner.module';
+import { NotificationModule } from './notification/notification.module';
 
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
     JwtModule.registerAsync({
       imports: [ConfigModule],
-      useFactory: async (configService: ConfigService) => ({
+      useFactory: (configService: ConfigService) => ({
         secret: configService.get<string>('JWT_SECRET') || 'defaultSecret',
-        signOptions: { expiresIn: '3650d' },
+        signOptions: { expiresIn: '15m' },
       }),
       inject: [ConfigService],
       global: true,
@@ -43,6 +44,7 @@ import { BannerModule } from './banner/banner.module';
     ShippingZoneModule,
     OrderModule,
     BannerModule,
+    NotificationModule,
   ],
   controllers: [AppController],
   providers: [

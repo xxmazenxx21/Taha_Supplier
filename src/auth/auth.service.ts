@@ -4,11 +4,22 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
+import { createHash, randomBytes } from 'node:crypto';
 import { Prisma, UserRole } from '../../generated/prisma/client.js';
 import { PrismaService } from '../prisma/prisma.service';
 import { comparePassword, hashPassword } from '../utils/security/hashing';
 import { LoginDto } from './dto/login.dto';
 import { SignupDto } from './dto/signup.dto';
+
+const REFRESH_TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+
+type AuthUser = {
+  id: number;
+  name: string;
+  email: string | null;
+  phone: string;
+  role: UserRole;
+};
 
 @Injectable()
 export class AuthService {
@@ -34,7 +45,15 @@ export class AuthService {
     }
 
     const hashedPassword = await hashPassword(signupDto.password);
-    let user;
+    let user: Prisma.UserGetPayload<{
+      select: {
+        id: true;
+        name: true;
+        email: true;
+        phone: true;
+        role: true;
+      };
+    }>;
 
     try {
       user = await this.prisma.user.create({
@@ -61,22 +80,15 @@ export class AuthService {
       throw error;
     }
 
-    const access_token = await this.jwtService.signAsync({
-      sub: user.id,
-      email: user.email,
-      role: user.role,
-    });
+    if (signupDto.fcm_token) {
+      await this.registerFcmToken(
+        user.id,
+        signupDto.fcm_token,
+        signupDto.platform,
+      );
+    }
 
-    return {
-      access_token,
-      user: {
-        id: user.id,
-        name: user.name,
-        email: user.email,
-        phone: user.phone,
-        role: user.role,
-      },
-    };
+    return this.createAuthResponse(user);
   }
 
   async login(loginDto: LoginDto) {
@@ -97,22 +109,15 @@ export class AuthService {
       throw new UnauthorizedException('Invalid email or password');
     }
 
-    const access_token = await this.jwtService.signAsync({
-      sub: user.id,
-      email: user.email,
-      role: user.role,
-    });
+    if (loginDto.fcm_token) {
+      await this.registerFcmToken(
+        user.id,
+        loginDto.fcm_token,
+        loginDto.platform,
+      );
+    }
 
-    return {
-      access_token,
-      user: {
-        id: user.id,
-        name: user.name,
-        email: user.email,
-        phone: user.phone,
-        role: user.role,
-      },
-    };
+    return this.createAuthResponse(user);
   }
 
   async adminDashboardSignup(adminData: {
@@ -141,6 +146,31 @@ export class AuthService {
     };
   }
 
+  async updateFcmToken(userId: number, fcmToken: string, platform?: string) {
+    await this.registerFcmToken(userId, fcmToken, platform);
+
+    return { success: true };
+  }
+
+  private registerFcmToken(
+    userId: number,
+    fcmToken: string,
+    platform?: string,
+  ) {
+    return this.prisma.userDevice.upsert({
+      where: { token: fcmToken },
+      update: {
+        user_id: userId,
+        ...(platform !== undefined && { platform }),
+      },
+      create: {
+        user_id: userId,
+        token: fcmToken,
+        platform,
+      },
+    });
+  }
+
   async adminDashboardLogin(loginDto: LoginDto) {
     const user = await this.prisma.user.findUnique({
       where: { email: loginDto.email },
@@ -159,14 +189,79 @@ export class AuthService {
       throw new UnauthorizedException('Invalid email or password');
     }
 
+    return this.createAuthResponse(user);
+  }
+
+  async refresh(refreshToken: string) {
+    const tokenHash = this.hashRefreshToken(refreshToken);
+    const newRefreshToken = this.generateRefreshToken();
+    const newTokenHash = this.hashRefreshToken(newRefreshToken);
+    const now = new Date();
+
+    const user = await this.prisma.$transaction(async (tx) => {
+      const storedToken = await tx.refreshToken.findUnique({
+        where: { token_hash: tokenHash },
+        include: { user: true },
+      });
+
+      if (
+        !storedToken ||
+        storedToken.revoked_at !== null ||
+        storedToken.expires_at <= now
+      ) {
+        throw new UnauthorizedException('Invalid or expired refresh token');
+      }
+
+      const revoked = await tx.refreshToken.updateMany({
+        where: { id: storedToken.id, revoked_at: null },
+        data: { revoked_at: now },
+      });
+
+      if (revoked.count !== 1) {
+        throw new UnauthorizedException('Refresh token has already been used');
+      }
+
+      await tx.refreshToken.create({
+        data: {
+          user_id: storedToken.user_id,
+          token_hash: newTokenHash,
+          expires_at: new Date(Date.now() + REFRESH_TOKEN_TTL_MS),
+        },
+      });
+
+      return storedToken.user;
+    });
+
+    return this.createAuthResponse(user, newRefreshToken);
+  }
+
+  async logout(refreshToken: string) {
+    await this.prisma.refreshToken.updateMany({
+      where: {
+        token_hash: this.hashRefreshToken(refreshToken),
+        revoked_at: null,
+      },
+      data: { revoked_at: new Date() },
+    });
+
+    return { success: true };
+  }
+
+  private async createAuthResponse(
+    user: AuthUser,
+    existingRefreshToken?: string,
+  ) {
     const access_token = await this.jwtService.signAsync({
       sub: user.id,
       email: user.email,
       role: user.role,
     });
+    const refresh_token =
+      existingRefreshToken ?? (await this.createRefreshToken(user.id));
 
     return {
       access_token,
+      refresh_token,
       user: {
         id: user.id,
         name: user.name,
@@ -175,5 +270,27 @@ export class AuthService {
         role: user.role,
       },
     };
+  }
+
+  private async createRefreshToken(userId: number): Promise<string> {
+    const refreshToken = this.generateRefreshToken();
+
+    await this.prisma.refreshToken.create({
+      data: {
+        user_id: userId,
+        token_hash: this.hashRefreshToken(refreshToken),
+        expires_at: new Date(Date.now() + REFRESH_TOKEN_TTL_MS),
+      },
+    });
+
+    return refreshToken;
+  }
+
+  private generateRefreshToken(): string {
+    return randomBytes(48).toString('base64url');
+  }
+
+  private hashRefreshToken(refreshToken: string): string {
+    return createHash('sha256').update(refreshToken).digest('hex');
   }
 }

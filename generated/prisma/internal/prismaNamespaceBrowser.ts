@@ -63,11 +63,13 @@ export const ModelName = {
   OrderItem: 'OrderItem',
   Product: 'Product',
   ProductImage: 'ProductImage',
+  RefreshToken: 'RefreshToken',
   Review: 'Review',
   ShippingZone: 'ShippingZone',
   SubCategory: 'SubCategory',
   BrandSubCategory: 'BrandSubCategory',
-  User: 'User'
+  User: 'User',
+  UserDevice: 'UserDevice'
 } as const
 
 export type ModelName = (typeof ModelName)[keyof typeof ModelName]
@@ -260,6 +262,18 @@ export const ProductImageScalarFieldEnum = {
 export type ProductImageScalarFieldEnum = (typeof ProductImageScalarFieldEnum)[keyof typeof ProductImageScalarFieldEnum]
 
 
+export const RefreshTokenScalarFieldEnum = {
+  id: 'id',
+  user_id: 'user_id',
+  token_hash: 'token_hash',
+  expires_at: 'expires_at',
+  revoked_at: 'revoked_at',
+  created_at: 'created_at'
+} as const
+
+export type RefreshTokenScalarFieldEnum = (typeof RefreshTokenScalarFieldEnum)[keyof typeof RefreshTokenScalarFieldEnum]
+
+
 export const ReviewScalarFieldEnum = {
   id: 'id',
   product_id: 'product_id',
@@ -326,6 +340,18 @@ export const UserScalarFieldEnum = {
 } as const
 
 export type UserScalarFieldEnum = (typeof UserScalarFieldEnum)[keyof typeof UserScalarFieldEnum]
+
+
+export const UserDeviceScalarFieldEnum = {
+  id: 'id',
+  user_id: 'user_id',
+  token: 'token',
+  platform: 'platform',
+  created_at: 'created_at',
+  updated_at: 'updated_at'
+} as const
+
+export type UserDeviceScalarFieldEnum = (typeof UserDeviceScalarFieldEnum)[keyof typeof UserDeviceScalarFieldEnum]
 
 
 export const SortOrder = {
