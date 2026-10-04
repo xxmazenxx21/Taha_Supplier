@@ -34,4 +34,19 @@ model User {
   couponUsages CouponUsage[]
   reviews      Review[]
   orders       Order[]
+  devices      UserDevice[]
+  refreshTokens RefreshToken[]
+}
+
+model UserDevice {
+  id         Int      @id @default(autoincrement())
+  user_id    Int
+  token      String   @unique
+  platform   String?
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  user User @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@index([user_id])
 }

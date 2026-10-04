@@ -11,6 +11,7 @@ import {
   Prisma,
 } from '../../generated/prisma/client.js';
 import { PrismaService } from '../prisma/prisma.service';
+import { NotificationService } from '../notification/notification.service';
 import { CreateOrderDto } from './dto/create-order.dto';
 
 const MAX_SERIALIZATION_RETRIES = 3;
@@ -18,7 +19,10 @@ const CLIENT_CANCELLATION_WINDOW_MS = 48 * 60 * 60 * 1000;
 
 @Injectable()
 export class OrderService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly notificationService: NotificationService,
+  ) {}
 
   async create(userId: number, dto: CreateOrderDto) {
     if (
@@ -295,6 +299,16 @@ export class OrderService {
           },
         );
 
+        const devices = await this.prisma.userDevice.findMany({
+          where: { user_id: userId },
+          select: { token: true },
+        });
+
+        await this.notificationService.sendOrderCreatedNotification(
+          devices.map((device) => device.token),
+          order.id,
+        );
+
         return this.formatOrderResponse(order);
       } catch (error) {
         if (
@@ -431,7 +445,7 @@ export class OrderService {
   async updateStatus(orderId: number, status: OrderStatus) {
     const order = await this.prisma.order.findUnique({
       where: { id: orderId },
-      select: { id: true },
+      select: { id: true, user_id: true },
     });
 
     if (!order) {
@@ -456,6 +470,17 @@ export class OrderService {
         },
       },
     });
+
+    const devices = await this.prisma.userDevice.findMany({
+      where: { user_id: order.user_id },
+      select: { token: true },
+    });
+
+    await this.notificationService.sendOrderStatusChangedNotification(
+      devices.map((device) => device.token),
+      updatedOrder.id,
+      updatedOrder.status,
+    );
 
     return this.formatOrderResponse(updatedOrder);
   }

@@ -409,11 +409,13 @@ export const ModelName = {
   OrderItem: 'OrderItem',
   Product: 'Product',
   ProductImage: 'ProductImage',
+  RefreshToken: 'RefreshToken',
   Review: 'Review',
   ShippingZone: 'ShippingZone',
   SubCategory: 'SubCategory',
   BrandSubCategory: 'BrandSubCategory',
-  User: 'User'
+  User: 'User',
+  UserDevice: 'UserDevice'
 } as const
 
 export type ModelName = (typeof ModelName)[keyof typeof ModelName]
@@ -429,7 +431,7 @@ export type TypeMap<ExtArgs extends runtime.Types.Extensions.InternalArgs = runt
     omit: GlobalOmitOptions
   }
   meta: {
-    modelProps: "banner" | "bannerImage" | "brand" | "cart" | "cartItem" | "category" | "coupon" | "couponUsage" | "order" | "orderItem" | "product" | "productImage" | "review" | "shippingZone" | "subCategory" | "brandSubCategory" | "user"
+    modelProps: "banner" | "bannerImage" | "brand" | "cart" | "cartItem" | "category" | "coupon" | "couponUsage" | "order" | "orderItem" | "product" | "productImage" | "refreshToken" | "review" | "shippingZone" | "subCategory" | "brandSubCategory" | "user" | "userDevice"
     txIsolationLevel: TransactionIsolationLevel
   }
   model: {
@@ -1321,6 +1323,80 @@ export type TypeMap<ExtArgs extends runtime.Types.Extensions.InternalArgs = runt
         }
       }
     }
+    RefreshToken: {
+      payload: Prisma.$RefreshTokenPayload<ExtArgs>
+      fields: Prisma.RefreshTokenFieldRefs
+      operations: {
+        findUnique: {
+          args: Prisma.RefreshTokenFindUniqueArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$RefreshTokenPayload> | null
+        }
+        findUniqueOrThrow: {
+          args: Prisma.RefreshTokenFindUniqueOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$RefreshTokenPayload>
+        }
+        findFirst: {
+          args: Prisma.RefreshTokenFindFirstArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$RefreshTokenPayload> | null
+        }
+        findFirstOrThrow: {
+          args: Prisma.RefreshTokenFindFirstOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$RefreshTokenPayload>
+        }
+        findMany: {
+          args: Prisma.RefreshTokenFindManyArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$RefreshTokenPayload>[]
+        }
+        create: {
+          args: Prisma.RefreshTokenCreateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$RefreshTokenPayload>
+        }
+        createMany: {
+          args: Prisma.RefreshTokenCreateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        createManyAndReturn: {
+          args: Prisma.RefreshTokenCreateManyAndReturnArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$RefreshTokenPayload>[]
+        }
+        delete: {
+          args: Prisma.RefreshTokenDeleteArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$RefreshTokenPayload>
+        }
+        update: {
+          args: Prisma.RefreshTokenUpdateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$RefreshTokenPayload>
+        }
+        deleteMany: {
+          args: Prisma.RefreshTokenDeleteManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        updateMany: {
+          args: Prisma.RefreshTokenUpdateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        updateManyAndReturn: {
+          args: Prisma.RefreshTokenUpdateManyAndReturnArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$RefreshTokenPayload>[]
+        }
+        upsert: {
+          args: Prisma.RefreshTokenUpsertArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$RefreshTokenPayload>
+        }
+        aggregate: {
+          args: Prisma.RefreshTokenAggregateArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.AggregateRefreshToken>
+        }
+        groupBy: {
+          args: Prisma.RefreshTokenGroupByArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.RefreshTokenGroupByOutputType>[]
+        }
+        count: {
+          args: Prisma.RefreshTokenCountArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.RefreshTokenCountAggregateOutputType> | number
+        }
+      }
+    }
     Review: {
       payload: Prisma.$ReviewPayload<ExtArgs>
       fields: Prisma.ReviewFieldRefs
@@ -1691,6 +1767,80 @@ export type TypeMap<ExtArgs extends runtime.Types.Extensions.InternalArgs = runt
         }
       }
     }
+    UserDevice: {
+      payload: Prisma.$UserDevicePayload<ExtArgs>
+      fields: Prisma.UserDeviceFieldRefs
+      operations: {
+        findUnique: {
+          args: Prisma.UserDeviceFindUniqueArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$UserDevicePayload> | null
+        }
+        findUniqueOrThrow: {
+          args: Prisma.UserDeviceFindUniqueOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$UserDevicePayload>
+        }
+        findFirst: {
+          args: Prisma.UserDeviceFindFirstArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$UserDevicePayload> | null
+        }
+        findFirstOrThrow: {
+          args: Prisma.UserDeviceFindFirstOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$UserDevicePayload>
+        }
+        findMany: {
+          args: Prisma.UserDeviceFindManyArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$UserDevicePayload>[]
+        }
+        create: {
+          args: Prisma.UserDeviceCreateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$UserDevicePayload>
+        }
+        createMany: {
+          args: Prisma.UserDeviceCreateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        createManyAndReturn: {
+          args: Prisma.UserDeviceCreateManyAndReturnArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$UserDevicePayload>[]
+        }
+        delete: {
+          args: Prisma.UserDeviceDeleteArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$UserDevicePayload>
+        }
+        update: {
+          args: Prisma.UserDeviceUpdateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$UserDevicePayload>
+        }
+        deleteMany: {
+          args: Prisma.UserDeviceDeleteManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        updateMany: {
+          args: Prisma.UserDeviceUpdateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        updateManyAndReturn: {
+          args: Prisma.UserDeviceUpdateManyAndReturnArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$UserDevicePayload>[]
+        }
+        upsert: {
+          args: Prisma.UserDeviceUpsertArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$UserDevicePayload>
+        }
+        aggregate: {
+          args: Prisma.UserDeviceAggregateArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.AggregateUserDevice>
+        }
+        groupBy: {
+          args: Prisma.UserDeviceGroupByArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.UserDeviceGroupByOutputType>[]
+        }
+        count: {
+          args: Prisma.UserDeviceCountArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.UserDeviceCountAggregateOutputType> | number
+        }
+      }
+    }
   }
 } & {
   other: {
@@ -1904,6 +2054,18 @@ export const ProductImageScalarFieldEnum = {
 export type ProductImageScalarFieldEnum = (typeof ProductImageScalarFieldEnum)[keyof typeof ProductImageScalarFieldEnum]
 
 
+export const RefreshTokenScalarFieldEnum = {
+  id: 'id',
+  user_id: 'user_id',
+  token_hash: 'token_hash',
+  expires_at: 'expires_at',
+  revoked_at: 'revoked_at',
+  created_at: 'created_at'
+} as const
+
+export type RefreshTokenScalarFieldEnum = (typeof RefreshTokenScalarFieldEnum)[keyof typeof RefreshTokenScalarFieldEnum]
+
+
 export const ReviewScalarFieldEnum = {
   id: 'id',
   product_id: 'product_id',
@@ -1970,6 +2132,18 @@ export const UserScalarFieldEnum = {
 } as const
 
 export type UserScalarFieldEnum = (typeof UserScalarFieldEnum)[keyof typeof UserScalarFieldEnum]
+
+
+export const UserDeviceScalarFieldEnum = {
+  id: 'id',
+  user_id: 'user_id',
+  token: 'token',
+  platform: 'platform',
+  created_at: 'created_at',
+  updated_at: 'updated_at'
+} as const
+
+export type UserDeviceScalarFieldEnum = (typeof UserDeviceScalarFieldEnum)[keyof typeof UserDeviceScalarFieldEnum]
 
 
 export const SortOrder = {
@@ -2370,11 +2544,13 @@ export type GlobalOmitConfig = {
   orderItem?: Prisma.OrderItemOmit
   product?: Prisma.ProductOmit
   productImage?: Prisma.ProductImageOmit
+  refreshToken?: Prisma.RefreshTokenOmit
   review?: Prisma.ReviewOmit
   shippingZone?: Prisma.ShippingZoneOmit
   subCategory?: Prisma.SubCategoryOmit
   brandSubCategory?: Prisma.BrandSubCategoryOmit
   user?: Prisma.UserOmit
+  userDevice?: Prisma.UserDeviceOmit
 }
 
 /* Types for Logging */

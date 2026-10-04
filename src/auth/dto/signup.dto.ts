@@ -1,5 +1,6 @@
 import {
   IsEmail,
+  IsNotEmpty,
   IsNumber,
   IsOptional,
   IsString,
@@ -45,4 +46,14 @@ export class SignupDto {
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 7 })
   longitude?: number;
+
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  fcm_token?: string;
+
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  platform?: string;
 }
