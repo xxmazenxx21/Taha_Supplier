@@ -9,7 +9,7 @@ Messaging (FCM) in this backend.
 - Each unique FCM token is stored as a `UserDevice` belonging to a user.
 - A device can include a platform value such as `android` or `ios`.
 - Order-created notifications are sent to every device belonging to the user.
-- Admin order-status changes are sent to every device belonging to that order's
+- Admin order-status changes are sent to every device belonging to that order'
   user.
 - Admin broadcast notifications are sent to every registered device.
 - Notification records are not saved in a notification table.
@@ -71,7 +71,7 @@ Future<void> main() async {
 
   runApp(const MyApp());
 }
-```
+```d
 
 The Firebase project used by Flutter must correspond to the Firebase project
 configured on the NestJS server through its Firebase Admin credentials.
