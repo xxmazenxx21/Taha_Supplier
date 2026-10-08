@@ -27,6 +27,7 @@ import {
 import { CreateProductDto } from './dto/create-product.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
 import { FindAllProductsDto } from './dto/find-all-products.dto';
+import { FindAdminProductsDto } from './dto/find-admin-products.dto';
 import { ProductService } from './product.service';
 
 const productFileFields = [
@@ -82,10 +83,18 @@ export class ProductController {
     return this.productService.findAll(query);
   }
 
+  // Must stay declared before @Get(':id')
   @Get('admin')
   @Roles(UserRole.ADMIN)
-  findAllAdmin() {
-    return this.productService.findAllAdmin();
+  findAllAdmin(@Query() query: FindAdminProductsDto) {
+    return this.productService.findAllAdmin(query);
+  }
+
+  // Must stay declared before @Get(':id')
+  @Get('admin/:id')
+  @Roles(UserRole.ADMIN)
+  findOneAdmin(@Param('id') id: string) {
+    return this.productService.findOneAdmin(this.parseId(id));
   }
 
   @Get('search')
@@ -160,5 +169,13 @@ export class ProductController {
   @Roles(UserRole.ADMIN)
   removeImage(@Param('id') id: string, @Param('imageId') imageId: string) {
     return this.productService.removeGalleryImage(+id, +imageId);
+  }
+
+  private parseId(value: string): number {
+    const id = Number(value);
+    if (!Number.isInteger(id) || id < 1) {
+      throw new BadRequestException('Invalid product id');
+    }
+    return id;
   }
 }

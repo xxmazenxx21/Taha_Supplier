@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Delete,
@@ -6,6 +7,7 @@ import {
   Param,
   Patch,
   Post,
+  Query,
   UploadedFile,
   UseInterceptors,
 } from '@nestjs/common';
@@ -15,6 +17,7 @@ import { Roles } from '../decorators/roles.decorator';
 import { SubCategoryService } from './sub-category.service';
 import { CreateSubCategoryDto } from './dto/create-sub-category.dto';
 import { UpdateSubCategoryDto } from './dto/update-sub-category.dto';
+import { FindAdminSubCategoriesDto } from './dto/find-admin-sub-categories.dto';
 import { multerOptions, validateImageFiles } from '../utils/multer/multer';
 import {
   UploadFolder,
@@ -50,10 +53,18 @@ export class SubCategoryController {
     return this.subCategoryService.findAll();
   }
 
+  // Must stay declared before @Get(':id')
   @Get('admin')
   @Roles(UserRole.ADMIN)
-  findAllforAdmin() {
-    return this.subCategoryService.findAllforAdmin();
+  findAllforAdmin(@Query() query: FindAdminSubCategoriesDto) {
+    return this.subCategoryService.findAllforAdmin(query);
+  }
+
+  // Must stay declared before @Get(':id')
+  @Get('admin/:id')
+  @Roles(UserRole.ADMIN)
+  findOneForAdmin(@Param('id') id: string) {
+    return this.subCategoryService.findOneForAdmin(this.parseId(id));
   }
 
   @Get(':id')
@@ -86,5 +97,13 @@ export class SubCategoryController {
   @Roles(UserRole.ADMIN)
   remove(@Param('id') id: string) {
     return this.subCategoryService.remove(+id);
+  }
+
+  private parseId(value: string): number {
+    const id = Number(value);
+    if (!Number.isInteger(id) || id < 1) {
+      throw new BadRequestException('Invalid sub category id');
+    }
+    return id;
   }
 }

@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Delete,
@@ -58,6 +59,13 @@ export class CategoryController {
     return this.categoryService.findAllforAdmin();
   }
 
+  //admindashboard — must stay declared before @Get(':id')
+  @Get('admin/:id')
+  @Roles(UserRole.ADMIN)
+  findOneForAdmin(@Param('id') id: string) {
+    return this.categoryService.findOneForAdmin(this.parseId(id));
+  }
+
   //flutter
   @Get(':id')
   findOne(@Param('id') id: string) {
@@ -89,5 +97,13 @@ export class CategoryController {
   @Roles(UserRole.ADMIN)
   remove(@Param('id') id: string) {
     return this.categoryService.remove(+id);
+  }
+
+  private parseId(value: string): number {
+    const id = Number(value);
+    if (!Number.isInteger(id) || id < 1) {
+      throw new BadRequestException('Invalid category id');
+    }
+    return id;
   }
 }

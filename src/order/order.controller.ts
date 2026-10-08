@@ -6,6 +6,7 @@ import {
   Param,
   Patch,
   Post,
+  Query,
   Req,
   Res,
   UploadedFile,
@@ -27,6 +28,7 @@ import { OrderService } from './order.service';
 import { CreateOrderDto } from './dto/create-order.dto';
 import { UpdateOrderStatusDto } from './dto/update-order-status.dto';
 import { UpdatePaymentStatusDto } from './dto/update-payment-status.dto';
+import { FindAdminOrdersDto } from './dto/find-admin-orders.dto';
 
 type AuthedRequest = Request & { user: { sub: number; role: string } };
 
@@ -121,6 +123,8 @@ export class OrderController {
     res.sendFile(absolutePath);
   }
 
+  // Literal 'admin/cancelled' MUST stay declared before 'admin/:id',
+  // otherwise 'cancelled' binds as the :id param.
   @Get('admin/cancelled')
   @Roles(UserRole.ADMIN)
   findCancelledOrders() {
@@ -129,8 +133,15 @@ export class OrderController {
 
   @Get('admin')
   @Roles(UserRole.ADMIN)
-  findAllOrders() {
-    return this.orderService.findAllOrders();
+  findAllOrders(@Query() query: FindAdminOrdersDto) {
+    return this.orderService.findAllOrders(query);
+  }
+
+  // Must stay declared after 'admin/cancelled' and before @Get(':id')
+  @Get('admin/:id')
+  @Roles(UserRole.ADMIN)
+  findOneAdmin(@Param('id') id: string) {
+    return this.orderService.findOneAdmin(this.parseId(id));
   }
 
   @Get(':id')

@@ -32,6 +32,20 @@ export class CategoryService {
     });
   }
 
+  /** Admin edit form: the category and every subcategory, hidden included. */
+  async findOneForAdmin(id: number) {
+    const category = await this.prisma.category.findUnique({
+      where: { id },
+      include: { subcategories: { orderBy: { display_order: 'asc' } } },
+    });
+
+    if (!category) {
+      throw new NotFoundException('Category not found');
+    }
+
+    return category;
+  }
+
   async findOne(id: number) {
     const category = await this.prisma.category.findFirst({
       where: { id, is_hidden: false },

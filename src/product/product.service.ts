@@ -8,6 +8,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { CreateProductDto } from './dto/create-product.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
 import { FindAllProductsDto } from './dto/find-all-products.dto';
+import { FindAdminProductsDto } from './dto/find-admin-products.dto';
 import { promises as fs } from 'node:fs';
 import { join } from 'node:path';
 
@@ -207,16 +208,85 @@ export class ProductService {
     );
   }
 
-  async findAllAdmin() {
-    return await this.prisma.product.findMany({
-      orderBy: { created_at: 'desc' },
-      include: {
-        images: true,
+  /**
+   * Admin list: unfiltered by visibility (hidden subcategories and unavailable
+   * products included), paginated and searchable.
+   */
+  async findAllAdmin(query: FindAdminProductsDto = {}) {
+    const {
+      page = 1,
+      per_page = 20,
+      search,
+      subcategory_id,
+      category_id,
+      brand_id,
+      is_available,
+    } = query;
 
-        subCategory: { select: { id: true, name: true } },
+    const where: Prisma.ProductWhereInput = {};
+
+    if (subcategory_id) where.subcategory_id = subcategory_id;
+    if (brand_id) where.brand_id = brand_id;
+    if (category_id) where.subCategory = { category_id };
+    if (is_available !== undefined) where.is_available = is_available;
+    if (search) {
+      where.OR = [
+        { name: { contains: search, mode: 'insensitive' } },
+        { brand: { name: { contains: search, mode: 'insensitive' } } },
+      ];
+    }
+
+    const skip = (page - 1) * per_page;
+
+    // count() and findMany() share the same `where` reference.
+    const [total, products] = await Promise.all([
+      this.prisma.product.count({ where }),
+      this.prisma.product.findMany({
+        where,
+        orderBy: { created_at: 'desc' },
+        skip,
+        take: per_page,
+        include: {
+          images: { orderBy: { display_order: 'asc' } },
+          subCategory: { select: { id: true, name: true, category_id: true } },
+          brand: { select: { id: true, name: true, logo: true } },
+        },
+      }),
+    ]);
+
+    const last_page = Math.ceil(total / per_page) || 1;
+    const next_page = page < last_page ? page + 1 : null;
+
+    return {
+      items: products,
+      page,
+      per_page,
+      next_page,
+      last_page,
+      total,
+    };
+  }
+
+  /**
+   * Admin edit form: the full row regardless of availability or whether its
+   * subcategory is hidden. Gallery images carry their id so the
+   * DELETE /product/:id/images/:imageId endpoint can be used.
+   */
+  async findOneAdmin(id: number) {
+    const product = await this.prisma.product.findUnique({
+      where: { id },
+      include: {
+        images: { orderBy: { display_order: 'asc' } },
+        subCategory: { select: { id: true, name: true, category_id: true } },
         brand: { select: { id: true, name: true, logo: true } },
       },
     });
+
+    if (!product) {
+      throw new NotFoundException('Product not found');
+    }
+
+    return product;
   }
 
   async findAll(query: FindAllProductsDto) {

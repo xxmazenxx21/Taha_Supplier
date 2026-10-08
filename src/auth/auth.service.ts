@@ -250,9 +250,15 @@ export class AuthService {
     return this.createAuthResponse(user, newRefreshToken);
   }
 
-  /** Revokes every live refresh token for a user (e.g. after a password change). */
-  async revokeAllRefreshTokens(userId: number) {
-    await this.prisma.refreshToken.updateMany({
+  /**
+   * Revokes every live refresh token for a user (e.g. after a password change
+   * or a ban). Pass `tx` to enlist in a caller's transaction so the revocation
+   * commits atomically with whatever triggered it.
+   */
+  async revokeAllRefreshTokens(userId: number, tx?: Prisma.TransactionClient) {
+    const client = tx ?? this.prisma;
+
+    await client.refreshToken.updateMany({
       where: { user_id: userId, revoked_at: null },
       data: { revoked_at: new Date() },
     });

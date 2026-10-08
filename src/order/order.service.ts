@@ -18,6 +18,7 @@ import { NotificationService } from '../notification/notification.service';
 import { resolvePrivateUploadPath } from '../utils/multer/upload-paths';
 import { CreateOrderDto } from './dto/create-order.dto';
 import { PaymentStatusDecision } from './dto/update-payment-status.dto';
+import { FindAdminOrdersDto } from './dto/find-admin-orders.dto';
 
 const MAX_SERIALIZATION_RETRIES = 3;
 const CLIENT_CANCELLATION_WINDOW_MS = 48 * 60 * 60 * 1000;
@@ -401,9 +402,75 @@ export class OrderService {
     return this.formatOrderResponse(order);
   }
 
-  async findAllOrders() {
-    const orders = await this.prisma.order.findMany({
-      orderBy: { created_at: 'desc' },
+  async findAllOrders(query: FindAdminOrdersDto = {}) {
+    const {
+      page = 1,
+      per_page = 20,
+      status,
+      payment_status,
+      payment_method,
+      user_id,
+      from,
+      to,
+    } = query;
+
+    const where: Prisma.OrderWhereInput = {};
+
+    if (status) where.status = status;
+    if (payment_status) where.payment_status = payment_status;
+    if (payment_method) where.payment_method = payment_method;
+    if (user_id) where.user_id = user_id;
+    if (from || to) {
+      where.created_at = {
+        ...(from && { gte: new Date(from) }),
+        ...(to && { lte: new Date(to) }),
+      };
+    }
+
+    const skip = (page - 1) * per_page;
+
+    // count() and findMany() share the same `where` reference.
+    const [total, orders] = await Promise.all([
+      this.prisma.order.count({ where }),
+      this.prisma.order.findMany({
+        where,
+        orderBy: { created_at: 'desc' },
+        skip,
+        take: per_page,
+        include: {
+          items: true,
+          shippingZone: true,
+          user: {
+            select: {
+              id: true,
+              name: true,
+              shop_name: true,
+              phone: true,
+              email: true,
+              address: true,
+            },
+          },
+        },
+      }),
+    ]);
+
+    const last_page = Math.ceil(total / per_page) || 1;
+    const next_page = page < last_page ? page + 1 : null;
+
+    return {
+      items: orders.map((order) => this.formatOrderResponse(order)),
+      page,
+      per_page,
+      next_page,
+      last_page,
+      total,
+    };
+  }
+
+  /** Admin detail view: everything needed to review a single order. */
+  async findOneAdmin(orderId: number) {
+    const order = await this.prisma.order.findUnique({
+      where: { id: orderId },
       include: {
         items: true,
         shippingZone: true,
@@ -415,12 +482,28 @@ export class OrderService {
             phone: true,
             email: true,
             address: true,
+            status: true,
           },
         },
+        coupon: { select: { id: true, code: true, discount_value: true } },
       },
     });
 
-    return orders.map((order) => this.formatOrderResponse(order));
+    if (!order) {
+      throw new NotFoundException('Order not found');
+    }
+
+    return {
+      ...this.formatOrderResponse(order),
+      // discount_value is a Decimal; surface it as a number like other money.
+      coupon: order.coupon
+        ? {
+            id: order.coupon.id,
+            code: order.coupon.code,
+            discount_value: Number(order.coupon.discount_value),
+          }
+        : null,
+    };
   }
 
   async findCancelledOrders() {

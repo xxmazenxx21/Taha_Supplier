@@ -37,6 +37,14 @@ export class ShippingZoneService {
     });
   }
 
+  /** Admin edit form: one zone, active or inactive. */
+  async findOneForAdmin(id: number) {
+    const zone = await this.prisma.shippingZone.findUnique({ where: { id } });
+    if (!zone) throw new NotFoundException('Shipping zone not found');
+
+    return zone;
+  }
+
   async update(id: number, dto: UpdateShippingZoneDto) {
     const zone = await this.prisma.shippingZone.findUnique({ where: { id } });
     if (!zone) throw new NotFoundException('Shipping zone not found');

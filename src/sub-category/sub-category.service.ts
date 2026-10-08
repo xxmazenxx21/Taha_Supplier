@@ -4,6 +4,11 @@ import { join } from 'node:path';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateSubCategoryDto } from './dto/create-sub-category.dto';
 import { UpdateSubCategoryDto } from './dto/update-sub-category.dto';
+import { FindAdminSubCategoriesDto } from './dto/find-admin-sub-categories.dto';
+
+const ADMIN_PARENT_CATEGORY_SELECT = {
+  select: { id: true, name: true, is_hidden: true },
+} as const;
 
 @Injectable()
 export class SubCategoryService {
@@ -25,10 +30,42 @@ export class SubCategoryService {
     });
   }
 
-  findAllforAdmin() {
+  /** Admin list: hidden included, with the parent category for context. */
+  findAllforAdmin(query: FindAdminSubCategoriesDto = {}) {
+    const { category_id } = query;
+
     return this.prisma.subCategory.findMany({
+      where: { category_id },
       orderBy: { display_order: 'asc' },
+      include: { category: ADMIN_PARENT_CATEGORY_SELECT },
     });
+  }
+
+  /** Admin edit form: hidden included, with parent category and linked brands. */
+  async findOneForAdmin(id: number) {
+    const subCategory = await this.prisma.subCategory.findUnique({
+      where: { id },
+      include: {
+        category: ADMIN_PARENT_CATEGORY_SELECT,
+        brandSubCategories: {
+          where: { brand: { deleted_at: null } },
+          include: {
+            brand: { select: { id: true, name: true, logo: true } },
+          },
+        },
+      },
+    });
+
+    if (!subCategory) {
+      throw new NotFoundException('Sub category not found');
+    }
+
+    const { brandSubCategories, ...rest } = subCategory;
+
+    return {
+      ...rest,
+      brands: brandSubCategories.map((link) => link.brand),
+    };
   }
   // get subcategory with brands  flutter
   async findOne(id: number) {

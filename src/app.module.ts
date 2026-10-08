@@ -22,6 +22,7 @@ import { OrderModule } from './order/order.module';
 import { BannerModule } from './banner/banner.module';
 import { NotificationModule } from './notification/notification.module';
 import { ProfileModule } from './profile/profile.module';
+import { CustomersModule } from './customers/customers.module';
 
 @Module({
   imports: [
@@ -53,6 +54,7 @@ import { ProfileModule } from './profile/profile.module';
     BannerModule,
     NotificationModule,
     ProfileModule,
+    CustomersModule,
   ],
   controllers: [AppController],
   providers: [

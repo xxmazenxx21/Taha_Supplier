@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Controller,
   Get,
   Post,
@@ -34,6 +35,13 @@ export class ShippingZoneController {
     return this.shippingZoneService.getAllShippingZonesForAdmin();
   }
 
+  /** Get one shipping zone, active or inactive (admin only) */
+  @Get('admin/:id')
+  @Roles('ADMIN')
+  findOneForAdmin(@Param('id') id: string) {
+    return this.shippingZoneService.findOneForAdmin(this.parseId(id));
+  }
+
   /** Update a shipping zone (admin only) */
   @Patch(':id')
   @Roles('ADMIN')
@@ -48,5 +56,13 @@ export class ShippingZoneController {
   @Roles('CLIENT')
   findAllActive() {
     return this.shippingZoneService.findAllActive();
+  }
+
+  private parseId(value: string): number {
+    const id = Number(value);
+    if (!Number.isInteger(id) || id < 1) {
+      throw new BadRequestException('Invalid shipping zone id');
+    }
+    return id;
   }
 }
