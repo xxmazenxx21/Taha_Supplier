@@ -25,9 +25,8 @@ export class SignupDto {
   })
   phone: string;
 
-  @IsOptional()
   @IsEmail()
-  email?: string;
+  email: string;
 
   @IsString()
   @MinLength(8)

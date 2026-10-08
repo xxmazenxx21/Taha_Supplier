@@ -17,7 +17,7 @@ export class SubCategoryService {
       },
     });
   }
-//flutter 
+  //flutter
   findAll() {
     return this.prisma.subCategory.findMany({
       where: { is_hidden: false },
@@ -30,30 +30,30 @@ export class SubCategoryService {
       orderBy: { display_order: 'asc' },
     });
   }
-// get subcategory with brands  flutter 
+  // get subcategory with brands  flutter
   async findOne(id: number) {
-       const subCategory = await this.prisma.subCategory.findUnique({
-    where: { id },
-    include: {
-      brandSubCategories: {
-        where: {
-          brand: {
-            deleted_at: null,
+    // Hidden subcategories, and those under a hidden category, are not public.
+    const subCategory = await this.prisma.subCategory.findFirst({
+      where: { id, is_hidden: false, category: { is_hidden: false } },
+      include: {
+        brandSubCategories: {
+          where: {
+            brand: {
+              deleted_at: null,
+            },
           },
-        },
-        include: {
-          brand: {
-            select: {
-              id: true,
-              name: true,
-              logo: true,
+          include: {
+            brand: {
+              select: {
+                id: true,
+                name: true,
+                logo: true,
+              },
             },
           },
         },
       },
-    },
-  });
-
+    });
 
     if (!subCategory) {
       throw new NotFoundException('Sub category not found');
@@ -62,8 +62,14 @@ export class SubCategoryService {
     return subCategory;
   }
 
-  async update(id: number, updateSubCategoryDto: UpdateSubCategoryDto, imageUrl?: string) {
-    const subCategory = await this.prisma.subCategory.findUnique({ where: { id } });
+  async update(
+    id: number,
+    updateSubCategoryDto: UpdateSubCategoryDto,
+    imageUrl?: string,
+  ) {
+    const subCategory = await this.prisma.subCategory.findUnique({
+      where: { id },
+    });
 
     if (!subCategory) {
       if (imageUrl) await this.deleteLocalFiles([imageUrl]);

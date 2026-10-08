@@ -1,4 +1,13 @@
-import { Controller, Get, Req, Post, Body, Patch, Param, Delete } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Req,
+  Post,
+  Body,
+  Patch,
+  Param,
+  Delete,
+} from '@nestjs/common';
 import { Request } from 'express';
 import { UserRole } from '../../generated/prisma/client.js';
 import { Roles } from '../decorators/roles.decorator';
@@ -25,7 +34,11 @@ export class CartController {
     @Req() req: Request & { user: { sub: number; role: string } },
     @Body() dto: CreateCartItemDto,
   ) {
-    return this.cartService.addItemToCart(req.user.sub, dto.product_id, dto.quantity);
+    return this.cartService.addItemToCart(
+      req.user.sub,
+      dto.product_id,
+      dto.quantity,
+    );
   }
 
   @Patch('items/:id')
@@ -59,9 +72,7 @@ export class CartController {
 
   @Post('remove-coupon')
   @Roles(UserRole.CLIENT)
-  removeCoupon(
-    @Req() req: Request & { user: { sub: number; role: string } },
-  ) {
+  removeCoupon(@Req() req: Request & { user: { sub: number; role: string } }) {
     return this.cartService.removeCoupon(req.user.sub);
   }
 }

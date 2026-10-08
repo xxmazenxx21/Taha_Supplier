@@ -31,16 +31,22 @@ export class BrandService {
     // If subcategories were provided, validate they exist
     let uniqueSubcategoryIds: number[] | undefined;
     if (Array.isArray(subcategory_ids) && subcategory_ids.length > 0) {
-      uniqueSubcategoryIds = Array.from(new Set(subcategory_ids.map((v: any) => Number(v))));
+      uniqueSubcategoryIds = Array.from(
+        new Set(subcategory_ids.map((v: any) => Number(v))),
+      );
       const found = await this.prisma.subCategory.findMany({
         where: { id: { in: uniqueSubcategoryIds } },
         select: { id: true },
       });
       const foundIds = found.map((s) => s.id);
-      const missing = uniqueSubcategoryIds.filter((id) => !foundIds.includes(id));
+      const missing = uniqueSubcategoryIds.filter(
+        (id) => !foundIds.includes(id),
+      );
       if (missing.length > 0) {
         await this.deleteLocalFiles([brandData.logo]);
-        throw new NotFoundException(`Subcategories not found: ${missing.join(', ')}`);
+        throw new NotFoundException(
+          `Subcategories not found: ${missing.join(', ')}`,
+        );
       }
     }
 
@@ -73,7 +79,9 @@ export class BrandService {
    * Validates brand and subcategories exist. Ignores already-existing relations.
    */
   async addSubcategories(brandId: number, subcategoryIds: number[]) {
-    const brand = await this.prisma.brand.findFirst({ where: { id: brandId, deleted_at: null } });
+    const brand = await this.prisma.brand.findFirst({
+      where: { id: brandId, deleted_at: null },
+    });
     if (!brand) throw new NotFoundException('Brand not found');
 
     const uniqueIds = Array.from(new Set(subcategoryIds.map((v) => Number(v))));
@@ -83,11 +91,20 @@ export class BrandService {
     });
     const foundIds = found.map((s) => s.id);
     const missing = uniqueIds.filter((id) => !foundIds.includes(id));
-    if (missing.length > 0) throw new NotFoundException(`Subcategories not found: ${missing.join(', ')}`);
+    if (missing.length > 0)
+      throw new NotFoundException(
+        `Subcategories not found: ${missing.join(', ')}`,
+      );
 
     // Create relations, skipping existing ones
-    const toCreate = uniqueIds.map((subcategory_id) => ({ brand_id: brandId, subcategory_id }));
-    await this.prisma.brandSubCategory.createMany({ data: toCreate, skipDuplicates: true });
+    const toCreate = uniqueIds.map((subcategory_id) => ({
+      brand_id: brandId,
+      subcategory_id,
+    }));
+    await this.prisma.brandSubCategory.createMany({
+      data: toCreate,
+      skipDuplicates: true,
+    });
 
     return this.prisma.brand.findUnique({
       where: { id: brandId },
@@ -100,7 +117,8 @@ export class BrandService {
     const rel = await this.prisma.brandSubCategory.findFirst({
       where: { brand_id: brandId, subcategory_id: subcategoryId },
     });
-    if (!rel) throw new NotFoundException('Brand-subcategory relation not found');
+    if (!rel)
+      throw new NotFoundException('Brand-subcategory relation not found');
 
     await this.prisma.brandSubCategory.delete({ where: { id: rel.id } });
     return { deleted: true };
@@ -123,10 +141,9 @@ export class BrandService {
     });
   }
 
-
-//return brand without subcatigories 
-  async  findAllForAdmin() {
-    return await  this.prisma.brand.findMany({
+  //return brand without subcatigories
+  async findAllForAdmin() {
+    return await this.prisma.brand.findMany({
       where: { deleted_at: null },
       select: {
         id: true,
@@ -139,12 +156,15 @@ export class BrandService {
     });
   }
 
-
   async findOne(id: number) {
     const brand = await this.prisma.brand.findFirst({
       where: { id, deleted_at: null },
       include: {
-        brandSubCategories: { include: { subCategory: { select: { id: true, name: true ,image:true} } } },
+        brandSubCategories: {
+          include: {
+            subCategory: { select: { id: true, name: true, image: true } },
+          },
+        },
       },
     });
 
@@ -152,7 +172,11 @@ export class BrandService {
     return brand;
   }
 
-  async update(id: number, updateBrandDto: UpdateBrandDto, newLogoPath?: string) {
+  async update(
+    id: number,
+    updateBrandDto: UpdateBrandDto,
+    newLogoPath?: string,
+  ) {
     const brand = await this.prisma.brand.findFirst({
       where: { id, deleted_at: null },
     });

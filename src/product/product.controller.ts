@@ -12,11 +12,18 @@ import {
   UploadedFiles,
   UseInterceptors,
 } from '@nestjs/common';
-import { FileInterceptor, FileFieldsInterceptor, FilesInterceptor } from '@nestjs/platform-express';
+import {
+  FileInterceptor,
+  FileFieldsInterceptor,
+  FilesInterceptor,
+} from '@nestjs/platform-express';
 import { UserRole } from '../../generated/prisma/client.js';
 import { Roles } from '../decorators/roles.decorator';
 import { multerOptions, validateImageFiles } from '../utils/multer/multer';
-import { UploadFolder, getUploadPublicPath } from '../utils/multer/upload-paths';
+import {
+  UploadFolder,
+  getUploadPublicPath,
+} from '../utils/multer/upload-paths';
 import { CreateProductDto } from './dto/create-product.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
 import { FindAllProductsDto } from './dto/find-all-products.dto';
@@ -39,7 +46,10 @@ export class ProductController {
   @Post()
   @Roles(UserRole.ADMIN)
   @UseInterceptors(
-    FileFieldsInterceptor(productFileFields, multerOptions(UploadFolder.PRODUCTS)),
+    FileFieldsInterceptor(
+      productFileFields,
+      multerOptions(UploadFolder.PRODUCTS),
+    ),
   )
   create(
     @Body() createProductDto: CreateProductDto,
@@ -51,19 +61,23 @@ export class ProductController {
 
     validateImageFiles([...(files.image ?? []), ...(files.images ?? [])]);
 
-    const mainImageUrl = getUploadPublicPath(UploadFolder.PRODUCTS, files.image[0].filename);
+    const mainImageUrl = getUploadPublicPath(
+      UploadFolder.PRODUCTS,
+      files.image[0].filename,
+    );
     const galleryImageUrls = (files.images ?? []).map((file) =>
       getUploadPublicPath(UploadFolder.PRODUCTS, file.filename),
     );
 
-    return this.productService.create(createProductDto, mainImageUrl, galleryImageUrls);
+    return this.productService.create(
+      createProductDto,
+      mainImageUrl,
+      galleryImageUrls,
+    );
   }
 
-
-
-
   @Get()
-   @Roles(UserRole.CLIENT)
+  @Roles(UserRole.CLIENT)
   findAll(@Query() query: FindAllProductsDto) {
     return this.productService.findAll(query);
   }
@@ -75,24 +89,27 @@ export class ProductController {
   }
 
   @Get('search')
-   @Roles(UserRole.CLIENT)
+  @Roles(UserRole.CLIENT)
   searchProducts(@Query('q') q: string) {
     if (!q || q.length < 2) {
-      throw new BadRequestException('Search query must be at least 2 characters long');
+      throw new BadRequestException(
+        'Search query must be at least 2 characters long',
+      );
     }
     return this.productService.search(q);
   }
 
   @Get(':id')
-    @Roles(UserRole.CLIENT)
+  @Roles(UserRole.CLIENT)
   findOne(@Param('id') id: string) {
     return this.productService.findOne(+id);
   }
 
-
   @Patch(':id')
   @Roles(UserRole.ADMIN)
-  @UseInterceptors(FileInterceptor('image', multerOptions(UploadFolder.PRODUCTS)))
+  @UseInterceptors(
+    FileInterceptor('image', multerOptions(UploadFolder.PRODUCTS)),
+  )
   update(
     @Param('id') id: string,
     @Body() updateProductDto: UpdateProductDto,
@@ -109,32 +126,19 @@ export class ProductController {
     return this.productService.update(+id, updateProductDto, mainImageUrl);
   }
 
-
-
-
-
-
-  
   @Delete(':id')
   @Roles(UserRole.ADMIN)
   remove(@Param('id') id: string) {
     return this.productService.remove(+id);
   }
 
-
-
-
-
-
-
-
-
-
   // --- Dedicated endpoints for gallery image management ---
 
   @Post(':id/images')
   @Roles(UserRole.ADMIN)
-  @UseInterceptors(FilesInterceptor('images', 10, multerOptions(UploadFolder.PRODUCTS)))
+  @UseInterceptors(
+    FilesInterceptor('images', 10, multerOptions(UploadFolder.PRODUCTS)),
+  )
   addImages(
     @Param('id') id: string,
     @UploadedFiles() images: Express.Multer.File[],
@@ -154,11 +158,7 @@ export class ProductController {
 
   @Delete(':id/images/:imageId')
   @Roles(UserRole.ADMIN)
-  removeImage(
-    @Param('id') id: string,
-    @Param('imageId') imageId: string,
-  ) {
+  removeImage(@Param('id') id: string, @Param('imageId') imageId: string) {
     return this.productService.removeGalleryImage(+id, +imageId);
   }
 }
-

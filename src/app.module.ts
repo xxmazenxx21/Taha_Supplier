@@ -1,9 +1,11 @@
 import { Module } from '@nestjs/common';
+import { join } from 'node:path';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { PrismaModule } from './prisma/prisma.module';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { JwtModule } from '@nestjs/jwt';
+import { ServeStaticModule } from '@nestjs/serve-static';
 import { APP_GUARD } from '@nestjs/core';
 import { AuthGuard } from './guards/auth.guard';
 import { RolesGuard } from './guards/roles.guard';
@@ -19,10 +21,15 @@ import { ShippingZoneModule } from './shipping-zone/shipping-zone.module';
 import { OrderModule } from './order/order.module';
 import { BannerModule } from './banner/banner.module';
 import { NotificationModule } from './notification/notification.module';
+import { ProfileModule } from './profile/profile.module';
 
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
+    ServeStaticModule.forRoot({
+      rootPath: join(process.cwd(), 'uploads'),
+      serveRoot: '/uploads',
+    }),
     JwtModule.registerAsync({
       imports: [ConfigModule],
       useFactory: (configService: ConfigService) => ({
@@ -45,6 +52,7 @@ import { NotificationModule } from './notification/notification.module';
     OrderModule,
     BannerModule,
     NotificationModule,
+    ProfileModule,
   ],
   controllers: [AppController],
   providers: [

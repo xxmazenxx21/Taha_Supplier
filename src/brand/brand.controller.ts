@@ -16,7 +16,10 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { UserRole } from '../../generated/prisma/client.js';
 import { Roles } from '../decorators/roles.decorator';
 import { multerOptions } from '../utils/multer/multer';
-import { getUploadPublicPath, UploadFolder } from '../utils/multer/upload-paths';
+import {
+  getUploadPublicPath,
+  UploadFolder,
+} from '../utils/multer/upload-paths';
 import { BrandService } from './brand.service';
 import { CreateBrandDto } from './dto/create-brand.dto';
 import { UpdateBrandDto } from './dto/update-brand.dto';
@@ -53,12 +56,12 @@ export class BrandController {
     return this.brandService.findAll();
   }
 
-  @Get()
-    @Roles(UserRole.ADMIN)
+  // Must stay declared before @Get(':id')
+  @Get('admin')
+  @Roles(UserRole.ADMIN)
   findAllForAdmin() {
     return this.brandService.findAllForAdmin();
   }
-
 
   @Get(':id')
   findOne(@Param('id') id: string) {
@@ -86,7 +89,9 @@ export class BrandController {
     return this.brandService.update(
       +id,
       updateBrandDto,
-      logo ? getUploadPublicPath(UploadFolder.BRANDS, logo.filename) : undefined,
+      logo
+        ? getUploadPublicPath(UploadFolder.BRANDS, logo.filename)
+        : undefined,
     );
   }
 
@@ -98,7 +103,10 @@ export class BrandController {
 
   @Post(':id/subcategories')
   @Roles(UserRole.ADMIN)
-  addSubcategories(@Param('id') id: string, @Body() dto: ManageSubcategoriesDto) {
+  addSubcategories(
+    @Param('id') id: string,
+    @Body() dto: ManageSubcategoriesDto,
+  ) {
     return this.brandService.addSubcategories(+id, dto.subcategory_ids);
   }
 

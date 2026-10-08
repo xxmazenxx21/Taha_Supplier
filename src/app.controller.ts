@@ -8,7 +8,6 @@ import { Roles } from './decorators/roles.decorator';
 export class AppController {
   constructor(private readonly appService: AppService) {}
 
-
   @Get('home')
   @Roles(UserRole.CLIENT)
   getHome(@Req() req: Request & { user: { sub: number } }) {

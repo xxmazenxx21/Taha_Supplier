@@ -13,7 +13,10 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { UserRole } from '../../generated/prisma/client.js';
 import { Roles } from '../decorators/roles.decorator';
 import { multerOptions, validateImageFiles } from '../utils/multer/multer';
-import { UploadFolder, getUploadPublicPath } from '../utils/multer/upload-paths';
+import {
+  UploadFolder,
+  getUploadPublicPath,
+} from '../utils/multer/upload-paths';
 import { CategoryService } from './category.service';
 import { CreateCategoryDto } from './dto/create-category.dto';
 import { UpdateCategoryDto } from './dto/update-category.dto';
@@ -21,10 +24,12 @@ import { UpdateCategoryDto } from './dto/update-category.dto';
 @Controller('category')
 export class CategoryController {
   constructor(private readonly categoryService: CategoryService) {}
-// adminDashboard
+  // adminDashboard
   @Post()
   @Roles(UserRole.ADMIN)
-  @UseInterceptors(FileInterceptor('image', multerOptions(UploadFolder.CATEGORIES)))
+  @UseInterceptors(
+    FileInterceptor('image', multerOptions(UploadFolder.CATEGORIES)),
+  )
   create(
     @Body() createCategoryDto: CreateCategoryDto,
     @UploadedFile() image?: Express.Multer.File,
@@ -46,23 +51,24 @@ export class CategoryController {
     return this.categoryService.findAll();
   }
 
-  
-//admindashboard
-  @Get()
-    @Roles(UserRole.ADMIN)
+  //admindashboard — must stay declared before @Get(':id')
+  @Get('admin')
+  @Roles(UserRole.ADMIN)
   findAllforAdmin() {
     return this.categoryService.findAllforAdmin();
   }
 
-//flutter
+  //flutter
   @Get(':id')
   findOne(@Param('id') id: string) {
     return this.categoryService.findOne(+id);
   }
-//admindashboard
+  //admindashboard
   @Patch(':id')
   @Roles(UserRole.ADMIN)
-  @UseInterceptors(FileInterceptor('image', multerOptions(UploadFolder.CATEGORIES)))
+  @UseInterceptors(
+    FileInterceptor('image', multerOptions(UploadFolder.CATEGORIES)),
+  )
   update(
     @Param('id') id: string,
     @Body() updateCategoryDto: UpdateCategoryDto,
@@ -78,7 +84,7 @@ export class CategoryController {
 
     return this.categoryService.update(+id, updateCategoryDto, imageUrl);
   }
-//admindashboard
+  //admindashboard
   @Delete(':id')
   @Roles(UserRole.ADMIN)
   remove(@Param('id') id: string) {

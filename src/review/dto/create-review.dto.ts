@@ -9,17 +9,6 @@ import {
 } from 'class-validator';
 
 export class CreateReviewDto {
-  @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  @Min(1)
-  product_id?: number;
-
-  @Type(() => Number)
-  @IsInt()
-  @Min(1)
-  user_id: number;
-
   @Type(() => Number)
   @IsInt()
   @Min(1)

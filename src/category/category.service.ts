@@ -34,8 +34,8 @@ export class CategoryService {
 
   async findOne(id: number) {
     const category = await this.prisma.category.findFirst({
-      where: { id ,is_hidden:false},
-      include:{subcategories:{where:{is_hidden:false}}},
+      where: { id, is_hidden: false },
+      include: { subcategories: { where: { is_hidden: false } } },
     });
 
     if (!category) {
@@ -45,8 +45,11 @@ export class CategoryService {
     return category;
   }
 
-
-  async update(id: number, updateCategoryDto: UpdateCategoryDto, imageUrl?: string) {
+  async update(
+    id: number,
+    updateCategoryDto: UpdateCategoryDto,
+    imageUrl?: string,
+  ) {
     const category = await this.prisma.category.findUnique({ where: { id } });
 
     if (!category) {
@@ -68,7 +71,6 @@ export class CategoryService {
 
     return updated;
   }
-
 
   remove(id: number) {
     return this.prisma.category.update({

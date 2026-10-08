@@ -3,7 +3,7 @@ import { CouponService } from './coupon.service';
 import { CouponController } from './coupon.controller';
 import { PrismaModule } from '../prisma/prisma.module';
 @Module({
-    imports: [PrismaModule],
+  imports: [PrismaModule],
   controllers: [CouponController],
   providers: [CouponService],
 })

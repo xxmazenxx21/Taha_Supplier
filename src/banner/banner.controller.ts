@@ -52,13 +52,13 @@ export class BannerController {
   }
 
   @Get()
-  @Roles(UserRole.ADMIN,UserRole.CLIENT)
+  @Roles(UserRole.ADMIN, UserRole.CLIENT)
   findAll() {
     return this.bannerService.findAll();
   }
 
   @Get(':id')
-   @Roles(UserRole.ADMIN,UserRole.CLIENT)
+  @Roles(UserRole.ADMIN, UserRole.CLIENT)
   findOne(@Param('id', ParseIntPipe) id: number) {
     return this.bannerService.findOne(id);
   }

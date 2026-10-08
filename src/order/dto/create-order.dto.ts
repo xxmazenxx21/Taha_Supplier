@@ -19,9 +19,8 @@ export class CreateOrderDto {
   @IsEnum(PaymentMethod)
   payment_method: PaymentMethod;
 
-  @IsOptional()
-  @IsString()
-  payment_proof_image?: string;
+  // payment_proof is an uploaded file (multipart field), never a client-supplied
+  // path. The stored path is derived server-side in the controller.
 
   @IsString()
   @IsNotEmpty()

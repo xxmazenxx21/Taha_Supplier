@@ -23,7 +23,9 @@ export class ProductService {
     let discount_percentage: number | null = null;
     if (createProductDto.discount_price && createProductDto.price > 0) {
       discount_percentage = Math.round(
-        ((createProductDto.price - createProductDto.discount_price) / createProductDto.price) * 100,
+        ((createProductDto.price - createProductDto.discount_price) /
+          createProductDto.price) *
+          100,
       );
     }
 
@@ -56,7 +58,11 @@ export class ProductService {
     }
   }
 
-  async update(id: number, updateProductDto: UpdateProductDto, mainImageUrl?: string) {
+  async update(
+    id: number,
+    updateProductDto: UpdateProductDto,
+    mainImageUrl?: string,
+  ) {
     const product = await this.prisma.product.findUnique({
       where: { id },
       select: { image: true, price: true, discount_price: true },
@@ -67,7 +73,10 @@ export class ProductService {
       throw new NotFoundException('Product not found');
     }
 
-    const newPrice = updateProductDto.price !== undefined ? updateProductDto.price : Number(product.price);
+    const newPrice =
+      updateProductDto.price !== undefined
+        ? updateProductDto.price
+        : Number(product.price);
     const newDiscountPrice =
       updateProductDto.discount_price !== undefined
         ? updateProductDto.discount_price
@@ -81,12 +90,16 @@ export class ProductService {
     //   2. { price: X } alone        — discount_price comes from the existing row.
     if (newDiscountPrice !== null && newDiscountPrice >= newPrice) {
       if (mainImageUrl) await this.deleteLocalFiles([mainImageUrl]);
-      throw new BadRequestException('discount_price cannot be greater than or equal to price');
+      throw new BadRequestException(
+        'discount_price cannot be greater than or equal to price',
+      );
     }
 
     let discount_percentage: number | null = null;
     if (newDiscountPrice && newPrice > 0) {
-      discount_percentage = Math.round(((newPrice - newDiscountPrice) / newPrice) * 100);
+      discount_percentage = Math.round(
+        ((newPrice - newDiscountPrice) / newPrice) * 100,
+      );
     }
 
     try {
@@ -154,11 +167,6 @@ export class ProductService {
     return this.findOne(productId);
   }
 
-
-
-
-
-
   async removeGalleryImage(productId: number, imageId: number) {
     const image = await this.prisma.productImage.findFirst({
       where: { id: imageId, product_id: productId },
@@ -204,23 +212,17 @@ export class ProductService {
       orderBy: { created_at: 'desc' },
       include: {
         images: true,
-  
+
         subCategory: { select: { id: true, name: true } },
         brand: { select: { id: true, name: true, logo: true } },
       },
     });
   }
 
-
-
-
-
-
-
-
   async findAll(query: FindAllProductsDto) {
     const {
       subcategory_id,
+      category_id,
       search,
       available,
       offers,
@@ -232,8 +234,13 @@ export class ProductService {
     } = query;
 
     const where: Prisma.ProductWhereInput = {
-      // Only show products whose subcategory is not hidden
-      subCategory: { is_hidden: false },
+      // Only show products whose subcategory and parent category are visible.
+      // `category_id` is undefined when not supplied, which Prisma ignores.
+      subCategory: {
+        is_hidden: false,
+        category_id,
+        category: { is_hidden: false },
+      },
     };
 
     if (subcategory_id) where.subcategory_id = subcategory_id;
@@ -248,8 +255,9 @@ export class ProductService {
     if (offers === 1) where.discount_price = { not: null };
     if (min_rating !== undefined) where.rating = { gte: min_rating };
 
-    let orderBy: Prisma.ProductOrderByWithRelationInput | Prisma.ProductOrderByWithRelationInput[] =
-      { display_order: 'asc' };
+    let orderBy:
+      | Prisma.ProductOrderByWithRelationInput
+      | Prisma.ProductOrderByWithRelationInput[] = { display_order: 'asc' };
 
     switch (sort) {
       case 'bestSelling':
@@ -288,14 +296,18 @@ export class ProductService {
     const last_page = Math.ceil(total / per_page) || 1;
     const next_page = page < last_page ? page + 1 : null;
 
-    let items = products.map((product) => ({
+    const items = products.map((product) => ({
       id: product.id,
       name: product.name,
       image: product.image,
       images: product.images.map((img) => img.image_url),
       price: Number(product.price),
-      discount_price: product.discount_price ? Number(product.discount_price) : null,
-      discount_percentage: product.discount_percentage ? Number(product.discount_percentage) : null,
+      discount_price: product.discount_price
+        ? Number(product.discount_price)
+        : null,
+      discount_percentage: product.discount_percentage
+        ? Number(product.discount_percentage)
+        : null,
       unit: product.unit,
       is_available: product.is_available,
       rating: Number(product.rating),
@@ -307,7 +319,6 @@ export class ProductService {
       is_new: product.is_new,
     }));
 
- 
     return {
       items,
       page,
@@ -317,17 +328,6 @@ export class ProductService {
       total,
     };
   }
-
-
-
-
-
-
-
-
-
-
-
 
   async findOne(id: number) {
     const product = await this.prisma.product.findUnique({
@@ -350,8 +350,12 @@ export class ProductService {
       image: product.image,
       images: product.images.map((img) => img.image_url),
       price: Number(product.price),
-      discount_price: product.discount_price ? Number(product.discount_price) : null,
-      discount_percentage: product.discount_percentage ? Number(product.discount_percentage) : null,
+      discount_price: product.discount_price
+        ? Number(product.discount_price)
+        : null,
+      discount_percentage: product.discount_percentage
+        ? Number(product.discount_percentage)
+        : null,
       unit: product.unit,
       is_available: product.is_available,
       rating: Number(product.rating),
@@ -390,8 +394,12 @@ export class ProductService {
       image: product.image,
       images: product.images.map((img) => img.image_url),
       price: Number(product.price),
-      discount_price: product.discount_price ? Number(product.discount_price) : null,
-      discount_percentage: product.discount_percentage ? Number(product.discount_percentage) : null,
+      discount_price: product.discount_price
+        ? Number(product.discount_price)
+        : null,
+      discount_percentage: product.discount_percentage
+        ? Number(product.discount_percentage)
+        : null,
       unit: product.unit,
       is_available: product.is_available,
       rating: Number(product.rating),
@@ -403,13 +411,4 @@ export class ProductService {
       is_new: product.is_new,
     }));
   }
-
-
-
-
-
-
-
-
-
 }

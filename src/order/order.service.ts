@@ -2,38 +2,94 @@ import {
   BadRequestException,
   ConflictException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
+import { promises as fs } from 'node:fs';
 import {
   CouponStatus,
   OrderStatus,
   PaymentMethod,
+  PaymentStatus,
   Prisma,
 } from '../../generated/prisma/client.js';
 import { PrismaService } from '../prisma/prisma.service';
 import { NotificationService } from '../notification/notification.service';
+import { resolvePrivateUploadPath } from '../utils/multer/upload-paths';
 import { CreateOrderDto } from './dto/create-order.dto';
+import { PaymentStatusDecision } from './dto/update-payment-status.dto';
 
 const MAX_SERIALIZATION_RETRIES = 3;
 const CLIENT_CANCELLATION_WINDOW_MS = 48 * 60 * 60 * 1000;
+const CLIENT_CANCELLABLE_STATUSES: OrderStatus[] = [
+  OrderStatus.PENDING,
+  OrderStatus.CONFIRMED,
+];
 
 @Injectable()
 export class OrderService {
+  private readonly logger = new Logger(OrderService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly notificationService: NotificationService,
   ) {}
 
-  async create(userId: number, dto: CreateOrderDto) {
-    if (
-      dto.payment_method === PaymentMethod.CARD &&
-      !dto.payment_proof_image?.trim()
-    ) {
+  /**
+   * @param paymentProofPath relative path of an already-uploaded receipt, or
+   * undefined. Deleted from disk if anything below fails.
+   */
+  async create(userId: number, dto: CreateOrderDto, paymentProofPath?: string) {
+    // Validate the method/file combination before any transaction work starts.
+    if (dto.payment_method === PaymentMethod.CARD && !paymentProofPath) {
       throw new BadRequestException(
-        'payment_proof_image is required for card payments',
+        'payment_proof is required for card payments',
       );
     }
 
+    if (dto.payment_method === PaymentMethod.CASH && paymentProofPath) {
+      await this.deletePrivateFile(paymentProofPath);
+      throw new BadRequestException(
+        'payment_proof is only accepted for card payments',
+      );
+    }
+
+    let order: Awaited<ReturnType<typeof this.runCheckout>>;
+    try {
+      order = await this.runCheckout(userId, dto, paymentProofPath);
+    } catch (error) {
+      // Covers validation, conflicts, and exhausted serialization retries.
+      if (paymentProofPath) {
+        await this.deletePrivateFile(paymentProofPath);
+      }
+      throw error;
+    }
+
+    // The order is committed from here on — a push failure must not fail it.
+    try {
+      const devices = await this.prisma.userDevice.findMany({
+        where: { user_id: userId },
+        select: { token: true },
+      });
+
+      await this.notificationService.sendOrderCreatedNotification(
+        devices.map((device) => device.token),
+        order.id,
+      );
+    } catch (error) {
+      this.logger.error(
+        `Failed to send order-created notification for order ${order.id}: ${this.getErrorMessage(error)}`,
+      );
+    }
+
+    return this.formatOrderResponse(order);
+  }
+
+  private async runCheckout(
+    userId: number,
+    dto: CreateOrderDto,
+    paymentProofPath?: string,
+  ) {
     for (let attempt = 0; attempt < MAX_SERIALIZATION_RETRIES; attempt += 1) {
       try {
         const order = await this.prisma.$transaction(
@@ -242,7 +298,7 @@ export class OrderService {
                 payment_method: dto.payment_method,
                 payment_proof_image:
                   dto.payment_method === PaymentMethod.CARD
-                    ? dto.payment_proof_image
+                    ? paymentProofPath
                     : null,
                 subtotal,
                 discount_amount: discountAmount,
@@ -299,17 +355,7 @@ export class OrderService {
           },
         );
 
-        const devices = await this.prisma.userDevice.findMany({
-          where: { user_id: userId },
-          select: { token: true },
-        });
-
-        await this.notificationService.sendOrderCreatedNotification(
-          devices.map((device) => device.token),
-          order.id,
-        );
-
-        return this.formatOrderResponse(order);
+        return order;
       } catch (error) {
         if (
           this.isSerializationFailure(error) &&
@@ -404,6 +450,179 @@ export class OrderService {
     return orders.map((order) => this.formatOrderResponse(order));
   }
 
+  /**
+   * Client re-uploads a receipt after an admin rejection.
+   * @param paymentProofPath relative path of the newly uploaded file.
+   */
+  async replacePaymentProof(
+    userId: number,
+    orderId: number,
+    paymentProofPath: string,
+  ) {
+    const order = await this.prisma.order.findUnique({
+      where: { id: orderId },
+      select: {
+        id: true,
+        user_id: true,
+        status: true,
+        payment_method: true,
+        payment_status: true,
+        payment_proof_image: true,
+      },
+    });
+
+    if (!order || order.user_id !== userId) {
+      await this.deletePrivateFile(paymentProofPath);
+      throw new NotFoundException('Order not found');
+    }
+
+    if (order.payment_method !== PaymentMethod.CARD) {
+      await this.deletePrivateFile(paymentProofPath);
+      throw new ConflictException('Only card orders accept a payment proof');
+    }
+
+    if (
+      order.status === OrderStatus.CANCELLED ||
+      order.status === OrderStatus.CLIENTCANCELLED
+    ) {
+      await this.deletePrivateFile(paymentProofPath);
+      throw new ConflictException(
+        'A cancelled order cannot accept a new payment proof',
+      );
+    }
+
+    if (order.payment_status !== PaymentStatus.REJECTED) {
+      await this.deletePrivateFile(paymentProofPath);
+      throw new ConflictException(
+        'A new payment proof can only be uploaded after the previous one was rejected',
+      );
+    }
+
+    const updatedOrder = await this.prisma.order
+      .update({
+        where: { id: orderId },
+        data: {
+          payment_proof_image: paymentProofPath,
+          payment_status: PaymentStatus.PENDING,
+        },
+        include: { items: true, shippingZone: true },
+      })
+      .catch(async (error: unknown) => {
+        await this.deletePrivateFile(paymentProofPath);
+        throw error;
+      });
+
+    // Only once the new path is committed is the old file safe to remove.
+    if (order.payment_proof_image) {
+      await this.deletePrivateFile(order.payment_proof_image);
+    }
+
+    return this.formatOrderResponse(updatedOrder);
+  }
+
+  async updatePaymentStatus(
+    orderId: number,
+    paymentStatus: PaymentStatusDecision,
+  ) {
+    const order = await this.prisma.order.findUnique({
+      where: { id: orderId },
+      select: {
+        id: true,
+        user_id: true,
+        payment_method: true,
+        payment_proof_image: true,
+      },
+    });
+
+    if (!order) {
+      throw new NotFoundException('Order not found');
+    }
+
+    if (
+      order.payment_method !== PaymentMethod.CARD ||
+      !order.payment_proof_image
+    ) {
+      throw new ConflictException(
+        'Only card orders with an uploaded payment proof can be reviewed',
+      );
+    }
+
+    const updatedOrder = await this.prisma.order.update({
+      where: { id: orderId },
+      data: { payment_status: paymentStatus },
+      include: {
+        items: true,
+        shippingZone: true,
+        user: {
+          select: {
+            id: true,
+            name: true,
+            shop_name: true,
+            phone: true,
+            email: true,
+            address: true,
+          },
+        },
+      },
+    });
+
+    // Committed — a push failure must not fail the request.
+    try {
+      const devices = await this.prisma.userDevice.findMany({
+        where: { user_id: order.user_id },
+        select: { token: true },
+      });
+
+      await this.notificationService.sendPaymentStatusUpdatedNotification(
+        devices.map((device) => device.token),
+        updatedOrder.id,
+        updatedOrder.payment_status,
+      );
+    } catch (error) {
+      this.logger.error(
+        `Failed to send payment-status notification for order ${updatedOrder.id}: ${this.getErrorMessage(error)}`,
+      );
+    }
+
+    return this.formatOrderResponse(updatedOrder);
+  }
+
+  /**
+   * Resolves the receipt to an absolute path for streaming.
+   * `isAdmin` skips the ownership check; otherwise the order must belong to userId.
+   */
+  async getPaymentProofPath(
+    userId: number,
+    orderId: number,
+    isAdmin: boolean,
+  ): Promise<string> {
+    const order = await this.prisma.order.findUnique({
+      where: { id: orderId },
+      select: { id: true, user_id: true, payment_proof_image: true },
+    });
+
+    if (!order || (!isAdmin && order.user_id !== userId)) {
+      throw new NotFoundException('Order not found');
+    }
+
+    if (!order.payment_proof_image) {
+      throw new NotFoundException('Payment proof not found');
+    }
+
+    const absolutePath = resolvePrivateUploadPath(order.payment_proof_image);
+    if (!absolutePath) {
+      throw new NotFoundException('Payment proof not found');
+    }
+
+    try {
+      await fs.access(absolutePath);
+    } catch {
+      throw new NotFoundException('Payment proof not found');
+    }
+
+    return absolutePath;
+  }
+
   async cancel(userId: number, orderId: number) {
     const order = await this.prisma.order.findUnique({
       where: { id: orderId },
@@ -428,6 +647,10 @@ export class OrderService {
       throw new ConflictException(
         'Orders can only be cancelled within 48 hours of creation',
       );
+    }
+
+    if (!CLIENT_CANCELLABLE_STATUSES.includes(order.status)) {
+      throw new ConflictException('Order can no longer be cancelled');
     }
 
     const cancelledOrder = await this.prisma.order.update({
@@ -483,6 +706,34 @@ export class OrderService {
     );
 
     return this.formatOrderResponse(updatedOrder);
+  }
+
+  /**
+   * Best-effort removal of a private upload. A missing or unresolvable file
+   * must never turn into a request failure.
+   */
+  private async deletePrivateFile(relativePath: string): Promise<void> {
+    const absolutePath = resolvePrivateUploadPath(relativePath);
+    if (!absolutePath) {
+      this.logger.warn(
+        `Refusing to delete payment proof outside private-uploads: ${relativePath}`,
+      );
+      return;
+    }
+
+    try {
+      await fs.unlink(absolutePath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+        this.logger.warn(
+          `Could not delete payment proof ${relativePath}: ${this.getErrorMessage(error)}`,
+        );
+      }
+    }
+  }
+
+  private getErrorMessage(error: unknown): string {
+    return error instanceof Error ? error.message : String(error);
   }
 
   private isSerializationFailure(error: unknown): boolean {

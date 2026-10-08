@@ -1,4 +1,12 @@
-import { IsString, MinLength, IsOptional, ArrayUnique, ArrayNotEmpty, IsInt, IsArray } from 'class-validator';
+import {
+  IsString,
+  MinLength,
+  IsOptional,
+  ArrayUnique,
+  ArrayNotEmpty,
+  IsInt,
+  IsArray,
+} from 'class-validator';
 
 export class CreateBrandDto {
   @IsString()

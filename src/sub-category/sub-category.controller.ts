@@ -10,18 +10,26 @@ import {
   UseInterceptors,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
+import { UserRole } from '../../generated/prisma/client.js';
+import { Roles } from '../decorators/roles.decorator';
 import { SubCategoryService } from './sub-category.service';
 import { CreateSubCategoryDto } from './dto/create-sub-category.dto';
 import { UpdateSubCategoryDto } from './dto/update-sub-category.dto';
 import { multerOptions, validateImageFiles } from '../utils/multer/multer';
-import { UploadFolder, getUploadPublicPath } from '../utils/multer/upload-paths';
+import {
+  UploadFolder,
+  getUploadPublicPath,
+} from '../utils/multer/upload-paths';
 
 @Controller('sub-category')
 export class SubCategoryController {
   constructor(private readonly subCategoryService: SubCategoryService) {}
 
   @Post()
-  @UseInterceptors(FileInterceptor('image', multerOptions(UploadFolder.SUB_CATEGORY)))
+  @Roles(UserRole.ADMIN)
+  @UseInterceptors(
+    FileInterceptor('image', multerOptions(UploadFolder.SUB_CATEGORY)),
+  )
   create(
     @Body() createSubCategoryDto: CreateSubCategoryDto,
     @UploadedFile() image?: Express.Multer.File,
@@ -43,6 +51,7 @@ export class SubCategoryController {
   }
 
   @Get('admin')
+  @Roles(UserRole.ADMIN)
   findAllforAdmin() {
     return this.subCategoryService.findAllforAdmin();
   }
@@ -53,7 +62,10 @@ export class SubCategoryController {
   }
 
   @Patch(':id')
-  @UseInterceptors(FileInterceptor('image', multerOptions(UploadFolder.SUB_CATEGORY)))
+  @Roles(UserRole.ADMIN)
+  @UseInterceptors(
+    FileInterceptor('image', multerOptions(UploadFolder.SUB_CATEGORY)),
+  )
   update(
     @Param('id') id: string,
     @Body() updateSubCategoryDto: UpdateSubCategoryDto,
@@ -71,6 +83,7 @@ export class SubCategoryController {
   }
 
   @Delete(':id')
+  @Roles(UserRole.ADMIN)
   remove(@Param('id') id: string) {
     return this.subCategoryService.remove(+id);
   }

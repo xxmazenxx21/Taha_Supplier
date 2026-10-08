@@ -17,9 +17,10 @@ export class ShippingZoneService {
     const existing = await this.prisma.shippingZone.findUnique({
       where: { name: dto.name },
     });
-    if (existing) throw new ConflictException('Shipping zone name already exists');
+    if (existing)
+      throw new ConflictException('Shipping zone name already exists');
 
-    return  await this.prisma.shippingZone.create({
+    return await this.prisma.shippingZone.create({
       data: {
         name: dto.name,
         shipping_cost: dto.shipping_cost,
@@ -44,7 +45,8 @@ export class ShippingZoneService {
       const nameConflict = await this.prisma.shippingZone.findUnique({
         where: { name: dto.name },
       });
-      if (nameConflict) throw new ConflictException('Shipping zone name already exists');
+      if (nameConflict)
+        throw new ConflictException('Shipping zone name already exists');
     }
 
     return await this.prisma.shippingZone.update({

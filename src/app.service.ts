@@ -16,8 +16,6 @@ type HomeProduct = Prisma.ProductGetPayload<{
 export class AppService {
   constructor(private readonly prisma: PrismaService) {}
 
-
-
   async getHome(userId: number) {
     const visibleProduct = {
       is_available: true,
@@ -119,10 +117,10 @@ export class AppService {
       image: product.image,
       images: product.images.map((image) => image.image_url),
       price: Math.round(Number(product.price)),
-     discount_price:
-  product.discount_price === null
-    ? null
-    : Math.round(Number(product.discount_price)),
+      discount_price:
+        product.discount_price === null
+          ? null
+          : Math.round(Number(product.discount_price)),
       discount_percentage:
         product.discount_percentage === null
           ? null

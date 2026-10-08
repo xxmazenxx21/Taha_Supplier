@@ -30,7 +30,8 @@ function IsLessThan(property: string, validationOptions?: ValidationOptions) {
           const [relatedPropertyName] = args.constraints as string[];
           const relatedValue = (args.object as any)[relatedPropertyName];
           if (value === undefined || value === null) return true;
-          if (typeof value !== 'number' || typeof relatedValue !== 'number') return true;
+          if (typeof value !== 'number' || typeof relatedValue !== 'number')
+            return true;
           return value < relatedValue;
         },
       },

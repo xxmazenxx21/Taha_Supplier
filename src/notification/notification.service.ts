@@ -55,6 +55,23 @@ export class NotificationService {
     );
   }
 
+  async sendPaymentStatusUpdatedNotification(
+    fcmTokens: string[],
+    orderId: number,
+    paymentStatus: string,
+  ): Promise<NotificationSendResult> {
+    return this.sendToTokens(
+      fcmTokens,
+      'Payment status updated',
+      `The payment for your order #${orderId} was ${paymentStatus.toLowerCase()}.`,
+      {
+        type: 'PAYMENT_STATUS_UPDATED',
+        order_id: String(orderId),
+        payment_status: paymentStatus,
+      },
+    );
+  }
+
   async sendBroadcastNotification(
     title: string,
     body?: string,
@@ -70,30 +87,6 @@ export class NotificationService {
       { type: 'BROADCAST' },
     );
   }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-  
 
   private async sendToTokens(
     fcmTokens: string[],

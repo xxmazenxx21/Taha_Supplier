@@ -1,4 +1,8 @@
-import { Injectable, ConflictException, NotFoundException } from '@nestjs/common';
+import {
+  Injectable,
+  ConflictException,
+  NotFoundException,
+} from '@nestjs/common';
 import { CreateCouponDto } from './dto/create-coupon.dto';
 import { UpdateCouponDto } from './dto/update-coupon.dto';
 import { PrismaService } from '../prisma/prisma.service';
@@ -52,9 +56,9 @@ export class CouponService {
 
     const data: any = { ...updateCouponDto };
     if (updateCouponDto.start_date)
-      data.start_date = new Date(updateCouponDto.start_date as any);
+      data.start_date = new Date(updateCouponDto.start_date);
     if (updateCouponDto.end_date)
-      data.end_date = new Date(updateCouponDto.end_date as any);
+      data.end_date = new Date(updateCouponDto.end_date);
 
     return this.prisma.coupon.update({ where: { id }, data });
   }

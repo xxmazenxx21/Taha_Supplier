@@ -8,6 +8,12 @@ export class FindAllProductsDto {
   subcategory_id?: number;
 
   @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  category_id?: number;
+
+  @IsOptional()
   @IsString()
   search?: string;
 

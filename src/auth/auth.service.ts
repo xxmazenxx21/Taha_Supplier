@@ -1,11 +1,12 @@
 import {
   ConflictException,
+  ForbiddenException,
   Injectable,
   UnauthorizedException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { createHash, randomBytes } from 'node:crypto';
-import { Prisma, UserRole } from '../../generated/prisma/client.js';
+import { Prisma, UserRole, UserStatus } from '../../generated/prisma/client.js';
 import { PrismaService } from '../prisma/prisma.service';
 import { comparePassword, hashPassword } from '../utils/security/hashing';
 import { LoginDto } from './dto/login.dto';
@@ -109,6 +110,10 @@ export class AuthService {
       throw new UnauthorizedException('Invalid email or password');
     }
 
+    if (user.status === UserStatus.BANNED) {
+      throw new ForbiddenException('Account is banned');
+    }
+
     if (loginDto.fcm_token) {
       await this.registerFcmToken(
         user.id,
@@ -189,6 +194,10 @@ export class AuthService {
       throw new UnauthorizedException('Invalid email or password');
     }
 
+    if (user.status === UserStatus.BANNED) {
+      throw new ForbiddenException('Account is banned');
+    }
+
     return this.createAuthResponse(user);
   }
 
@@ -210,6 +219,12 @@ export class AuthService {
         storedToken.expires_at <= now
       ) {
         throw new UnauthorizedException('Invalid or expired refresh token');
+      }
+
+      // Access tokens live 15 minutes, so refusing to refresh is what actually
+      // locks a banned user out.
+      if (storedToken.user.status === UserStatus.BANNED) {
+        throw new ForbiddenException('Account is banned');
       }
 
       const revoked = await tx.refreshToken.updateMany({
@@ -235,6 +250,14 @@ export class AuthService {
     return this.createAuthResponse(user, newRefreshToken);
   }
 
+  /** Revokes every live refresh token for a user (e.g. after a password change). */
+  async revokeAllRefreshTokens(userId: number) {
+    await this.prisma.refreshToken.updateMany({
+      where: { user_id: userId, revoked_at: null },
+      data: { revoked_at: new Date() },
+    });
+  }
+
   async logout(refreshToken: string) {
     await this.prisma.refreshToken.updateMany({
       where: {
@@ -247,10 +270,12 @@ export class AuthService {
     return { success: true };
   }
 
-  private async createAuthResponse(
-    user: AuthUser,
-    existingRefreshToken?: string,
-  ) {
+  /**
+   * Issues an access token plus a refresh token. Public so flows outside this
+   * service (e.g. a password change) can re-issue credentials without
+   * duplicating the token logic.
+   */
+  async createAuthResponse(user: AuthUser, existingRefreshToken?: string) {
     const access_token = await this.jwtService.signAsync({
       sub: user.id,
       email: user.email,
