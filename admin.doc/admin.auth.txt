@@ -1,0 +1,246 @@
+================================================================================
+ADMIN — AUTH MODULE
+================================================================================
+
+1. MODULE
+--------------------------------------------------------------------------------
+Dashboard login and (currently unprotected) admin account creation. Backed by
+src/auth/. Admins share the token infrastructure with the mobile app: a
+15-minute access token plus a 30-day single-use refresh token. Used by: the
+Login page and the app-wide HTTP interceptor that performs the silent refresh.
+
+
+2. ENDPOINT SUMMARY
+--------------------------------------------------------------------------------
+METHOD | PATH                          | ROLE   | PURPOSE
+-------|-------------------------------|--------|-------------------------------
+POST   | /auth/adminDashboard/login    | public | Log in as ADMIN, get tokens
+POST   | /auth/adminDashboard/signup   | public | Create an ADMIN account (!!)
+POST   | /auth/refresh                 | public | Rotate the token pair
+POST   | /auth/logout                  | public | Revoke one refresh token
+
+/auth/login and /auth/signup exist but are the CLIENT endpoints. Do not use them
+for the dashboard — /auth/login does not check the role and would hand you a
+token for a CLIENT account.
+
+
+3. ENDPOINTS
+--------------------------------------------------------------------------------
+
+================================================================================
+3.1  POST /auth/adminDashboard/login
+================================================================================
+Role: public (@Public)
+Content-Type: application/json
+
+BODY  (LoginDto — the same DTO the client login uses)
+email     | string | REQUIRED | must be a valid email
+password  | string | REQUIRED | min length 8
+fcm_token | string | optional | non-empty — ACCEPTED BUT IGNORED here
+platform  | string | optional | non-empty — ACCEPTED BUT IGNORED here
+
+Note: adminDashboardLogin does NOT register fcm_token/platform even though the
+DTO permits them (only the CLIENT login does). Sending them is harmless but
+pointless; omit them.
+
+REQUEST EXAMPLE
+    {
+      "email": "taha@gmail.com",
+      "password": "taha12345678"
+    }
+
+SUCCESS 200
+    {
+      "message": "Success",
+      "data": {
+        "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+        "refresh_token": "Yk3Jd8QmR0xT...base64url",
+        "user": {
+          "id": 4,
+          "name": "taha",
+          "email": "taha@gmail.com",
+          "phone": "+201000000000",
+          "role": "ADMIN"
+        }
+      }
+    }
+
+The access_token payload is { sub: <userId>, email, role: "ADMIN" }.
+Store both tokens. Verify data.user.role === "ADMIN" before entering the
+dashboard.
+
+ERRORS
+  400 ["email must be an email"]
+  400 ["password must be longer than or equal to 8 characters"]
+  401 "Invalid email or password"
+      Returned for ALL of: unknown email, wrong password, and a VALID
+      non-admin account. The role check is folded into this one message on
+      purpose so the endpoint does not reveal which accounts are admins.
+  403 "Account is banned"   (credentials correct, role ADMIN, status BANNED)
+
+BUSINESS RULES / GOTCHAS
+  - Role is enforced here: only role = ADMIN can obtain a token from this path.
+  - The password comparison is constant-time. When the email is unknown or the
+    account is not an admin, the service still bcrypt-compares against a dummy
+    hash so the response time does not leak account existence.
+  - There is no rate limiting, lockout or captcha anywhere in the backend.
+  - There is no password-reset flow for admins. src/utils/email/ is empty and no
+    mail is ever sent. A forgotten admin password can only be fixed in the
+    database.
+  - PATCH /profile/password is @Roles(CLIENT) — an ADMIN CANNOT change their own
+    password through the API.
+
+================================================================================
+3.2  POST /auth/adminDashboard/signup
+================================================================================
+Role: public (@Public)            <-- SEE THE SECURITY WARNING BELOW
+Content-Type: application/json
+
+>>> ============================================================================
+>>> SECURITY WARNING — THIS ENDPOINT IS @Public
+>>>
+>>> POST /auth/adminDashboard/signup carries the @Public() decorator, so it
+>>> requires NO token and NO existing admin. ANYONE who can reach the server
+>>> can create a fully privileged ADMIN account and then use it to read every
+>>> customer's details, every order, every payment receipt, and to ban users.
+>>>
+>>> Confirmed in src/auth/auth.controller.ts: the handler is annotated
+>>> @Public(), and auth.service.adminDashboardSignup() hard-codes
+>>> role: UserRole.ADMIN.
+>>>
+>>> This is a privilege-escalation hole, not a documentation quirk. It must be
+>>> protected (@Roles(UserRole.ADMIN)) or removed before the API is exposed to
+>>> the internet. Documented here so the dashboard team is aware; NOT fixed as
+>>> part of this documentation task.
+>>> ============================================================================
+
+BODY — note this handler takes an INLINE TYPE, not a validated DTO
+name     | string | REQUIRED | no class-validator rules apply
+email    | string | REQUIRED | no format validation
+password | string | REQUIRED | NO minimum length enforced
+phone    | string | REQUIRED | no regex validation
+
+Because the parameter is a plain inline object type rather than a DTO class, the
+global ValidationPipe has no metadata to work with: there are NO length, format
+or regex checks on this endpoint, unlike /auth/signup. A one-character password
+is accepted.
+
+REQUEST EXAMPLE
+    {
+      "name": "New Admin",
+      "email": "newadmin@example.com",
+      "password": "whatever",
+      "phone": "+201111111111"
+    }
+
+SUCCESS 201 — the created user. NO TOKENS ARE RETURNED.
+    {
+      "message": "Success",
+      "data": {
+        "id": 7,
+        "name": "New Admin",
+        "email": "newadmin@example.com",
+        "phone": "+201111111111",
+        "role": "ADMIN"
+      }
+    }
+
+After creating the account you must log in separately at
+POST /auth/adminDashboard/login.
+
+ERRORS
+  500  A duplicate email or phone raises a raw Prisma P2002 that is NOT caught
+       here, so it surfaces as a 500 Internal Server Error rather than a clean
+       409. (Contrast /auth/signup, which does handle P2002 and returns 409
+       "<field> already exists".) Treat a 500 from this endpoint as "email or
+       phone already taken".
+
+BUSINESS RULES / GOTCHAS
+  - role is hard-coded to ADMIN. You cannot create DELIVERY, ORDERS_STAFF,
+    ACCOUNTS_STAFF or SUPPORT accounts anywhere in the API, even though the
+    enum defines them.
+  - The password IS bcrypt-hashed (10 rounds) despite the missing validation.
+  - status defaults to ACTIVE, so the new admin can log in immediately.
+  - No fcm_token handling here.
+
+================================================================================
+3.3  POST /auth/refresh
+================================================================================
+Role: public (@Public)
+Content-Type: application/json
+
+Shared with the mobile app. Full behaviour is in
+flutter.doc/flutter.auth.txt §3.3; the dashboard-relevant parts:
+
+BODY
+refresh_token | string | REQUIRED | non-empty
+
+SUCCESS 200 — a NEW access token AND a NEW refresh token, plus the user object
+    {
+      "message": "Success",
+      "data": {
+        "access_token": "eyJhbGciOi...new...",
+        "refresh_token": "Pq7Lm2Zc...new...",
+        "user": {
+          "id": 4,
+          "name": "taha",
+          "email": "taha@gmail.com",
+          "phone": "+201000000000",
+          "role": "ADMIN"
+        }
+      }
+    }
+
+ERRORS
+  400 ["refresh_token should not be empty"]
+  401 "Invalid or expired refresh token"
+  401 "Refresh token has already been used"
+  403 "Account is banned"
+
+BUSINESS RULES
+  - SINGLE USE. The token you send is revoked and replaced — always overwrite
+    both stored tokens with the response.
+  - Serialise refreshes behind one lock. A dashboard that fires several API
+    calls in parallel will otherwise send the same refresh token twice and get
+    401 "Refresh token has already been used", logging the admin out for no
+    reason.
+  - This endpoint does not check the role, so it works the same for admins and
+    clients.
+
+================================================================================
+3.4  POST /auth/logout
+================================================================================
+Role: public (@Public)
+Content-Type: application/json
+
+BODY
+refresh_token | string | REQUIRED | non-empty
+
+SUCCESS 200
+    { "message": "Success", "data": { "success": true } }
+
+Idempotent — returns success even for an unknown or already-revoked token.
+Clear local storage regardless.
+
+ERRORS
+  400 ["refresh_token should not be empty"]
+
+GOTCHA: only the ONE refresh token you pass is revoked. Other dashboard
+sessions / browsers stay logged in, and there is no "log out everywhere" for an
+admin.
+
+
+4. CHANGELOG vs THE OLD doc/ FOLDER
+--------------------------------------------------------------------------------
+CORRECTED
+- Token lifetimes: access 15 minutes, refresh 30 days with single-use rotation.
+  doc/AI_RULES.txt §9 claimed "JWT tokens signed indefinitely (3650d expiry).
+  No refresh token mechanism." That was wrong and the dashboard must implement
+  a refresh interceptor.
+
+NEW / NEWLY FLAGGED
+- 403 "Account is banned" is now returned by adminDashboardLogin and by refresh.
+- POST /auth/adminDashboard/signup being @Public, and the absence of ANY
+  validation on its body, were never documented. See the warning in §3.2.
+- The duplicate-email behaviour of adminDashboard/signup (uncaught P2002 ->
+  500) is documented here for the first time.

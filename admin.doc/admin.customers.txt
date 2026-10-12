@@ -1,0 +1,273 @@
+================================================================================
+ADMIN — CUSTOMERS MODULE
+** NOT IN THE ORIGINAL DOCUMENTATION PLAN — created because the module exists **
+================================================================================
+
+1. MODULE
+--------------------------------------------------------------------------------
+Customer management and the BAN feature. Scoped strictly to users whose role is
+CLIENT — staff and admin accounts are never listed or modifiable here. This is
+the ONLY place in the API that can set a user's status to BANNED, which is what
+makes the ban checks in /auth/login and /auth/refresh reachable. Backed by
+src/customers/. Used by: the Customers page.
+
+WHY THIS FILE EXISTS: the documentation plan listed twelve admin files and did
+not include customers, but src/customers/ is a real, registered module with
+three ADMIN routes confirmed in the boot log. Documented here for the right
+audience.
+
+
+2. ENDPOINT SUMMARY
+--------------------------------------------------------------------------------
+METHOD | PATH                             | ROLE  | PURPOSE
+-------|----------------------------------|-------|---------------------------
+GET    | /customers/admin                 | ADMIN | Paginated list + search
+GET    | /customers/admin/:id             | ADMIN | Detail + last 10 orders
+PATCH  | /customers/admin/:id/status      | ADMIN | BAN / UNBAN a customer
+
+The whole controller is @Roles(UserRole.ADMIN) at class level and each route
+repeats it.
+
+
+3. HOW BANNING WORKS
+--------------------------------------------------------------------------------
+Setting status = BANNED does two things in ONE TRANSACTION:
+  1. sets User.status = BANNED and stores the block_reason
+  2. revokes EVERY live refresh token for that user
+
+Because access tokens live 15 minutes, a banned customer keeps working until
+their current access token expires. At that point their refresh fails with
+403 "Account is banned" and they are locked out. Login also returns
+403 "Account is banned".
+
+WORST CASE: a banned customer can still act for up to 15 minutes. Do not treat
+a ban as instantaneous.
+
+UNBANNING (status = ACTIVE) clears block_reason to null. It does NOT restore the
+revoked refresh tokens — the customer simply logs in again.
+
+ONLY CLIENTS CAN BE BANNED. Passing an ADMIN's id returns 404 "Customer not
+found", so an admin cannot be locked out through this endpoint.
+
+
+4. ENDPOINTS
+--------------------------------------------------------------------------------
+
+================================================================================
+4.1  GET /customers/admin
+================================================================================
+Role: ADMIN
+
+QUERY PARAMS — all optional
+page     | int    | min 1, default 1
+per_page | int    | min 1, MAX 100, default 20
+search   | string | case-insensitive substring across name, shop_name, phone
+                    and email (OR'd together)
+status   | enum   | "ACTIVE" or "BANNED" (UserStatus)
+
+USEFUL QUERIES
+    all banned customers:            GET /customers/admin?status=BANNED
+    find by phone:                   GET /customers/admin?search=2025550117
+    find by shop:                    GET /customers/admin?search=cafe
+
+SUCCESS 200 — PAGINATED
+    {
+      "message": "Success",
+      "data": {
+        "items": [
+          {
+            "id": 5,
+            "name": "Tawreed QA Test",
+            "shop_name": "QA Test Store",
+            "phone": "+12025550117",
+            "email": "qa@example.com",
+            "address": "Test account - no delivery",
+            "status": "ACTIVE",
+            "block_reason": null,
+            "created_at": "2026-10-07T20:40:26.740Z",
+            "orders_count": 7,
+            "cancelled_orders_count": 2
+          }
+        ],
+        "page": 1,
+        "per_page": 20,
+        "next_page": null,
+        "last_page": 1,
+        "total": 1
+      }
+    }
+
+FIELD NOTES
+  orders_count            integer — ALL of the customer's orders, any status
+  cancelled_orders_count  integer — orders whose status is CANCELLED **or**
+                          CLIENTCANCELLED. This is the "too many returns"
+                          signal the admin uses when deciding to ban.
+  shop_name / email /
+  address / block_reason  string or NULL
+  status                  "ACTIVE" | "BANNED"
+  >>> password and refresh tokens are NEVER returned. latitude/longitude are
+  >>> NOT in the list response — only in the detail response.
+  >>> There is no updated_at in this payload.
+
+ORDERING: created_at DESC (newest customer first). Not configurable.
+FILTER: role = CLIENT is always applied and cannot be overridden.
+
+ERRORS
+  400 ["per_page must not be greater than 100"]
+  400 ["page must not be less than 1"]
+  400 ["status must be one of the following values: ACTIVE, BANNED"]
+  400 ["property foo should not exist"]
+  401 / 403
+
+PERFORMANCE NOTE: the cancelled counts for the whole page are fetched in ONE
+grouped query, not one query per row, so a large per_page is cheap.
+
+================================================================================
+4.2  GET /customers/admin/:id
+================================================================================
+Role: ADMIN
+
+PATH PARAMS
+id | int | REQUIRED | must be a positive integer
+
+SUCCESS 200 — the list fields PLUS coordinates and the last 10 orders
+    {
+      "message": "Success",
+      "data": {
+        "id": 5,
+        "name": "Tawreed QA Test",
+        "shop_name": "QA Test Store",
+        "phone": "+12025550117",
+        "email": "qa@example.com",
+        "address": "Test account - no delivery",
+        "status": "ACTIVE",
+        "block_reason": null,
+        "created_at": "2026-10-07T20:40:26.740Z",
+        "latitude": 30.0444196,
+        "longitude": 31.2357116,
+        "orders_count": 7,
+        "cancelled_orders_count": 2,
+        "orders": [
+          {
+            "id": 18,
+            "status": "PENDING",
+            "payment_status": "PENDING",
+            "total_amount": 849,
+            "created_at": "2026-10-08T23:28:13.987Z"
+          },
+          {
+            "id": 12,
+            "status": "CLIENTCANCELLED",
+            "payment_status": "PENDING",
+            "total_amount": 430,
+            "created_at": "2026-10-07T10:15:00.000Z"
+          }
+        ]
+      }
+    }
+
+FIELD NOTES
+  latitude / longitude     JSON NUMBER or null (converted from Decimal)
+  orders                   AT MOST 10, newest first (created_at DESC). Only
+                           those five fields per order — no items, no address.
+                           total_amount is a JSON NUMBER (rounded).
+                           For the full order use GET /order/admin/:id, or
+                           GET /order/admin?user_id=<id> for the full history.
+  orders_count             total across ALL orders, not just the 10 shown
+  cancelled_orders_count   CANCELLED + CLIENTCANCELLED across all orders
+
+ERRORS
+  400 "Invalid customer id"
+  404 "Customer not found"   — the id does not exist OR the user is not a
+                               CLIENT (e.g. you passed an ADMIN's id)
+  401 / 403
+
+================================================================================
+4.3  PATCH /customers/admin/:id/status
+================================================================================
+Role: ADMIN
+Content-Type: application/json
+
+PATH PARAMS
+id | int | REQUIRED | must be a positive integer
+
+BODY
+status       | enum   | REQUIRED | "ACTIVE" or "BANNED" (UserStatus)
+block_reason | string | see rule | any string.
+                                   REQUIRED AND NON-EMPTY when status = BANNED.
+                                   IGNORED when status = ACTIVE (block_reason is
+                                   forcibly set to null).
+
+The non-empty check is done after trimming, so "   " (whitespace only) is
+rejected just like an empty string or a missing key.
+
+REQUEST EXAMPLE — ban
+    {
+      "status": "BANNED",
+      "block_reason": "Too many cancelled orders"
+    }
+
+REQUEST EXAMPLE — unban (do NOT send block_reason)
+    { "status": "ACTIVE" }
+
+SUCCESS 200 — THE SAME SHAPE AS GET /customers/admin/:id
+    {
+      "message": "Success",
+      "data": {
+        "id": 5,
+        "name": "Tawreed QA Test",
+        "shop_name": "QA Test Store",
+        "phone": "+12025550117",
+        "email": "qa@example.com",
+        "address": "Test account - no delivery",
+        "status": "BANNED",
+        "block_reason": "Too many cancelled orders",
+        "created_at": "2026-10-07T20:40:26.740Z",
+        "latitude": 30.0444196,
+        "longitude": 31.2357116,
+        "orders_count": 7,
+        "cancelled_orders_count": 2,
+        "orders": [ { "...": "up to 10 recent orders" } ]
+      }
+    }
+
+ERRORS
+  400 "Invalid customer id"
+  400 "block_reason is required when banning a customer"
+      (status = BANNED with block_reason missing, empty, or whitespace only)
+  400 ["status must be one of the following values: ACTIVE, BANNED"]
+  400 ["property role should not exist"]   (role cannot be changed here)
+  404 "Customer not found"   (unknown id, or the user is not a CLIENT)
+  401 / 403
+
+BUSINESS RULES / GOTCHAS
+  - BANNING IS ATOMIC WITH TOKEN REVOCATION. The user update and the revocation
+    of every live refresh token happen in one transaction, so a ban can never
+    half-apply.
+  - UP TO A 15-MINUTE DELAY before the customer is actually locked out (their
+    existing access token keeps working). See §3.
+  - ONLY `status` and `block_reason` are writable. role, password, email, phone
+    and every other field are unreachable from this endpoint — the service maps
+    the two fields explicitly rather than spreading the DTO.
+  - UNBANNING CLEARS block_reason to null. If you want to keep a record of why
+    someone was banned, store it in your own audit log — the API discards it.
+  - NO AUDIT TRAIL. The API does not record who banned whom or when. `status`
+    and `block_reason` are the only persisted evidence, and there is no
+    updated_at in the response.
+  - BANNING DOES NOT TOUCH THE CUSTOMER'S DATA. Their cart, orders and reviews
+    are untouched, and their existing orders continue through fulfilment
+    normally. A ban only blocks authentication.
+  - Re-banning an already-banned customer with a new reason works and simply
+    overwrites block_reason (and re-revokes tokens).
+
+
+5. CHANGELOG vs THE OLD doc/ FOLDER
+--------------------------------------------------------------------------------
+ENTIRELY NEW MODULE
+- There was no customers documentation in doc/ at all, and no file for it in the
+  documentation plan. The whole /customers/admin surface is new.
+- Before this module existed, UserStatus.BANNED was unreachable: the enum and
+  the login/refresh ban checks existed, but no endpoint could set the status, so
+  the ban feature was dead code. These three routes are what activate it.
+- doc/admindashboard.txt described a general dashboard surface but contained no
+  customer list, customer detail or ban endpoint.

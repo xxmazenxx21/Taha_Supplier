@@ -1,0 +1,177 @@
+================================================================================
+FLUTTER — PROFILE MODULE
+================================================================================
+
+1. MODULE
+--------------------------------------------------------------------------------
+Lets a logged-in CLIENT read and edit their own account details and change their
+password. Backed by src/profile/. The user id always comes from the JWT
+(req.user.sub) — there is no :id path param, so a client can only ever touch
+their own record. Used by: the Profile side screen (and the "edit delivery
+address" shortcut during checkout).
+
+
+2. ENDPOINT SUMMARY
+--------------------------------------------------------------------------------
+METHOD | PATH               | ROLE   | PURPOSE
+-------|--------------------|--------|-----------------------------------------
+GET    | /profile           | CLIENT | Read my profile
+PATCH  | /profile           | CLIENT | Update my profile fields
+PATCH  | /profile/password  | CLIENT | Change password, returns NEW tokens
+
+
+3. ENDPOINTS
+--------------------------------------------------------------------------------
+
+================================================================================
+3.1  GET /profile
+================================================================================
+Role: CLIENT. No params, no body.
+
+SUCCESS 200
+    {
+      "message": "Success",
+      "data": {
+        "id": 12,
+        "name": "Ahmed Mahmoud",
+        "shop_name": "Ahmed Cafe",
+        "phone": "+201012345678",
+        "email": "ahmed@example.com",
+        "address": "12 Tahrir St, Cairo",
+        "latitude": 30.0444196,
+        "longitude": 31.2357116,
+        "created_at": "2026-09-14T08:12:44.112Z"
+      }
+    }
+
+FIELD NOTES
+  latitude / longitude  JSON NUMBER or null (converted from Decimal server-side)
+  shop_name / address   string or null
+  email                 string (always present for accounts created after email
+                        became required; older rows could theoretically be null)
+  Password, role, status and block_reason are deliberately NOT returned.
+
+ERRORS
+  401 Unauthorized
+  403 "You do not have the required roles to access this resource"
+  404 "User not found"   (token references a deleted user)
+
+================================================================================
+3.2  PATCH /profile
+================================================================================
+Role: CLIENT
+Content-Type: application/json
+All fields optional — send only what changed.
+
+BODY
+name      | string | optional | min length 2
+shop_name | string | optional | min length 2
+phone     | string | optional | /^\+?[1-9]\d{7,14}$/ (same regex as signup)
+email     | string | optional | must be a valid email
+address   | string | optional | any string
+latitude  | number | optional | max 7 decimal places
+longitude | number | optional | max 7 decimal places
+
+REQUEST EXAMPLE
+    {
+      "shop_name": "Ahmed Specialty Coffee",
+      "address": "44 Nile Corniche, Cairo",
+      "latitude": 30.0500000,
+      "longitude": 31.2400000
+    }
+
+SUCCESS 200 — exactly the same shape as GET /profile
+    {
+      "message": "Success",
+      "data": {
+        "id": 12,
+        "name": "Ahmed Mahmoud",
+        "shop_name": "Ahmed Specialty Coffee",
+        "phone": "+201012345678",
+        "email": "ahmed@example.com",
+        "address": "44 Nile Corniche, Cairo",
+        "latitude": 30.05,
+        "longitude": 31.24,
+        "created_at": "2026-09-14T08:12:44.112Z"
+      }
+    }
+
+ERRORS
+  400 validation array, e.g.
+      ["phone must be a valid international phone number"]
+      ["email must be an email"]
+  401 Unauthorized
+  403 role error
+  404 "User not found"
+  409 "<field> already exists"   — field is "phone" or "email", taken from the
+      Prisma unique-constraint target. e.g. { "message": "email already exists",
+      "error": "Conflict", "statusCode": 409 }
+
+BUSINESS RULES / GOTCHAS
+  - EMAIL CANNOT BE CLEARED. @IsEmail rejects null and "". Omit the key to leave
+    it unchanged; there is no way to blank it from this endpoint.
+  - role, status, block_reason and password are NOT accepted here. Sending them
+    returns 400 (forbidNonWhitelisted), so a client cannot promote or unban
+    themselves.
+  - Fields are mapped one by one server-side, so an omitted key is left alone
+    (it is not overwritten with null).
+  - Changing phone/email does NOT invalidate tokens. Only a password change does.
+
+================================================================================
+3.3  PATCH /profile/password
+================================================================================
+Role: CLIENT
+Content-Type: application/json
+
+BODY
+current_password | string | REQUIRED | min length 8
+new_password     | string | REQUIRED | min length 8
+
+REQUEST EXAMPLE
+    {
+      "current_password": "supersecret1",
+      "new_password": "evenbetter2026"
+    }
+
+SUCCESS 200 — returns a FULL fresh auth response, same shape as login
+    {
+      "message": "Success",
+      "data": {
+        "access_token": "eyJhbGciOi...brand-new...",
+        "refresh_token": "Zx9Qw1Rt...brand-new...",
+        "user": {
+          "id": 12,
+          "name": "Ahmed Mahmoud",
+          "email": "ahmed@example.com",
+          "phone": "+201012345678",
+          "role": "CLIENT"
+        }
+      }
+    }
+
+ERRORS
+  400 ["current_password must be longer than or equal to 8 characters"]
+  400 ["new_password must be longer than or equal to 8 characters"]
+  400 "Current password is incorrect"
+  401 Unauthorized
+  403 role error
+  404 "User not found"
+
+BUSINESS RULES / GOTCHAS
+  - ALL of the user's refresh tokens are revoked, then a new pair is issued.
+    Every OTHER device is logged out. The caller stays logged in ONLY if you
+    overwrite both stored tokens with the ones in this response.
+  - Do NOT keep using the old access token afterwards. It remains
+    cryptographically valid until its 15 minutes elapse, but its refresh token
+    is gone, so the session dies at the next refresh. Replace both immediately.
+  - new_password is not checked for being different from current_password — you
+    can "change" it to the same value.
+  - There is no password-reset / forgot-password flow. src/utils/email/ is empty
+    and no mail is ever sent.
+
+
+4. CHANGELOG vs THE OLD doc/ FOLDER
+--------------------------------------------------------------------------------
+NEW MODULE — the entire /profile module is new. There was no equivalent file in
+doc/; the mobile app previously had no way to read or edit the account or change
+the password.

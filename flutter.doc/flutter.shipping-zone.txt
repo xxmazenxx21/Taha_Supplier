@@ -1,0 +1,126 @@
+================================================================================
+FLUTTER — SHIPPING ZONE MODULE
+================================================================================
+
+1. MODULE
+--------------------------------------------------------------------------------
+The list of delivery areas and their flat shipping cost. The client picks one at
+checkout; its id goes into POST /order as shipping_zone_id, and the backend
+snapshots its cost into the order's shipping_fee. Backed by
+src/shipping-zone/. Used by: the Checkout screen (delivery-area picker).
+
+
+2. ENDPOINT SUMMARY
+--------------------------------------------------------------------------------
+METHOD | PATH             | ROLE   | PURPOSE
+-------|------------------|--------|--------------------------------------------
+GET    | /shipping-zone   | CLIENT | All ACTIVE zones, for the checkout picker
+
+That is the only shipping-zone endpoint the app may call. POST /shipping-zone,
+PATCH /shipping-zone/:id, GET /shipping-zone/admin and
+GET /shipping-zone/admin/:id are ADMIN-only (see
+admin.doc/admin.shipping-zone.txt).
+
+
+3. ENDPOINTS
+--------------------------------------------------------------------------------
+
+================================================================================
+3.1  GET /shipping-zone
+================================================================================
+Role: CLIENT. No path params, no query params, no body.
+
+SUCCESS 200 — a plain array, no pagination
+    {
+      "message": "Success",
+      "data": [
+        {
+          "id": 1,
+          "name": "القاهرة",
+          "shipping_cost": "30",
+          "display_order": 0
+        },
+        {
+          "id": 2,
+          "name": "المنصورة",
+          "shipping_cost": "50",
+          "display_order": 1
+        },
+        {
+          "id": 3,
+          "name": "أسوان",
+          "shipping_cost": "200",
+          "display_order": 2
+        },
+        {
+          "id": 4,
+          "name": "أخرى",
+          "shipping_cost": "100",
+          "display_order": 3
+        }
+      ]
+    }
+
+>>> shipping_cost IS A DECIMAL STRING, not a number. The service returns the raw
+>>> Prisma Decimal here. Parse it before doing arithmetic:
+>>>     final cost = double.parse(zone["shipping_cost"] as String);
+>>> (Contrast: inside an order response, shippingZone.shipping_cost IS converted
+>>> to a JSON number. The two endpoints differ — a known backend
+>>> inconsistency.)
+
+FIELD NOTES — ONLY FOUR FIELDS ARE SELECTED
+  id             integer
+  name           string (Arabic area name)
+  shipping_cost  DECIMAL STRING, e.g. "30"
+  display_order  integer
+  `is_active`, `created_at` and `updated_at` are NOT returned on this endpoint.
+  Every row here is active by definition.
+
+ORDERING: display_order ASC.
+FILTER: is_active = true only.
+
+ERRORS
+  401 Unauthorized
+  403 "You do not have the required roles to access this resource"
+      (the handler is @Roles('CLIENT') — an ADMIN token is rejected here)
+
+BUSINESS RULES / GOTCHAS
+  - Inactive zones are invisible to the client. If an admin deactivates the zone
+    a user already selected, POST /order fails with
+    409 "Shipping zone does not exist or is inactive". Re-fetch this list at the
+    start of checkout rather than caching it across sessions.
+  - The cost is FLAT per zone — it does not depend on cart weight, distance or
+    total. There is no free-shipping threshold anywhere in the code.
+  - Shipping is NOT part of the cart totals. GET /cart returns
+    subtotal / discount_amount / total with shipping excluded. Compute the
+    preview yourself:
+        grandTotal = cartTotal + parsedShippingCost
+    The authoritative figure is the `total_amount` returned by POST /order:
+        total_amount = subtotal - discount_amount + shipping_fee
+  - The list is typically short (a handful of areas) — no pagination exists or
+    is needed.
+  - The zone name is the only label available; there is no governorate/city
+    hierarchy and no postcode matching. The "أخرى" ("Other") row is the
+    catch-all the admin maintains.
+
+CHECKOUT RECIPE
+    GET /shipping-zone                 -> render the picker
+    user selects a zone                -> keep its id
+    POST /order  shipping_zone_id=<id> -> backend snapshots its cost
+
+
+4. CHANGELOG vs THE OLD doc/ FOLDER
+--------------------------------------------------------------------------------
+CORRECTED
+- doc/flutter.shippingzone.txt and doc/shippingzone.txt mixed the client and
+  admin routes into one document. The client only has GET /shipping-zone; the
+  admin routes now live in admin.doc/admin.shipping-zone.txt.
+- This endpoint returns only four fields (id, name, shipping_cost,
+  display_order) because of an explicit `select`. Older docs showed the full row
+  including is_active and the timestamps.
+- shipping_cost is explicitly documented as a DECIMAL STRING here. The old docs
+  showed it as a number, which is only true inside order responses.
+
+NEW
+- GET /shipping-zone/admin/:id was added for the dashboard edit form (admin
+  doc), but nothing changed for the app.

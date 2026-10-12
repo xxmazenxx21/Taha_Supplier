@@ -1,0 +1,502 @@
+================================================================================
+ADMIN — ORDER MODULE
+================================================================================
+
+1. MODULE
+--------------------------------------------------------------------------------
+Order fulfilment and manual bank-transfer review. Orders are IMMUTABLE snapshots
+— the admin can change the fulfilment `status` and the `payment_status`, and
+nothing else. Items, prices, totals, address and coupon cannot be edited after
+creation. Backed by src/order/. Used by: the Orders page (list, detail, status
+workflow, receipt review).
+
+
+2. ENDPOINT SUMMARY
+--------------------------------------------------------------------------------
+METHOD | PATH                          | ROLE          | PURPOSE
+-------|-------------------------------|---------------|------------------------
+GET    | /order/admin                  | ADMIN         | Paginated list + filters
+GET    | /order/admin/cancelled        | ADMIN         | Cancelled only (array)
+GET    | /order/admin/:id              | ADMIN         | Full detail for review
+PATCH  | /order/:id                    | ADMIN         | Change fulfilment status
+PATCH  | /order/:id/payment-status     | ADMIN         | APPROVE / REJECT receipt
+GET    | /order/:id/payment-proof      | ADMIN, CLIENT | Stream the receipt image
+
+CLIENT-only (an ADMIN token gets 403): GET /order, GET /order/:id,
+PATCH /order/:id/cancel, PATCH /order/:id/payment-proof.
+
+ROUTE ORDER IS CRITICAL AND IS CORRECT IN THE CONTROLLER:
+'admin/cancelled' is declared BEFORE 'admin/:id', otherwise "cancelled" would
+bind as the :id param. Both precede ':id'.
+
+
+3. ENUMS
+--------------------------------------------------------------------------------
+status (OrderStatus) — fulfilment lifecycle
+    PENDING -> CONFIRMED -> PROCESSING -> SHIPPED -> DELIVERED
+    CANCELLED        cancelled by an ADMIN
+    CLIENTCANCELLED  cancelled by the client (48h window, PENDING/CONFIRMED only)
+
+payment_status (PaymentStatus) — only meaningful for CARD orders
+    PENDING | APPROVED | REJECTED
+
+payment_method (PaymentMethod)
+    CASH   cash on delivery, no receipt, payment_status stays PENDING forever
+    CARD   manual bank transfer with an uploaded receipt the admin must review
+
+NO STATUS-TRANSITION VALIDATION EXISTS. PATCH /order/:id accepts ANY
+OrderStatus value from ANY current status — you can move DELIVERED back to
+PENDING, or set CLIENTCANCELLED as an admin. Enforce a sane workflow in the
+dashboard UI.
+
+`delivered_at` exists in the schema but NO code path ever sets it. It is always
+null. Use `updated_at` plus status = DELIVERED instead.
+
+
+4. ENDPOINTS
+--------------------------------------------------------------------------------
+
+================================================================================
+4.1  GET /order/admin
+================================================================================
+Role: ADMIN
+
+QUERY PARAMS — all optional
+page           | int    | min 1, default 1
+per_page       | int    | min 1, MAX 100, default 20
+status         | enum   | OrderStatus: PENDING | CONFIRMED | PROCESSING |
+                          SHIPPED | DELIVERED | CANCELLED | CLIENTCANCELLED
+payment_status | enum   | PENDING | APPROVED | REJECTED
+payment_method | enum   | CASH | CARD
+user_id        | int    | min 1 — all orders of one customer
+from           | string | ISO-8601 date, INCLUSIVE lower bound on created_at
+to             | string | ISO-8601 date, INCLUSIVE upper bound on created_at
+
+USEFUL QUERIES
+    needs receipt review:
+        GET /order/admin?payment_method=CARD&payment_status=PENDING
+    new orders to confirm:
+        GET /order/admin?status=PENDING
+    one customer's history:
+        GET /order/admin?user_id=5
+    a date range:
+        GET /order/admin?from=2026-10-01&to=2026-10-31
+
+SUCCESS 200 — PAGINATED
+    {
+      "message": "Success",
+      "data": {
+        "items": [
+          {
+            "id": 18,
+            "user_id": 5,
+            "coupon_id": 1,
+            "shipping_zone_id": 1,
+            "status": "PENDING",
+            "payment_method": "CARD",
+            "payment_status": "PENDING",
+            "payment_proof_image": "private-uploads/payment-proofs/7b2f....jpg",
+            "subtotal": 910,
+            "discount_amount": 91,
+            "shipping_fee": 30,
+            "total_amount": 849,
+            "delivery_address": "12 Tahrir St, Cairo",
+            "delivery_lat": "30.0444196",
+            "delivery_lng": "31.2357116",
+            "delivery_notes": "Call on arrival",
+            "created_at": "2026-10-08T23:28:13.987Z",
+            "updated_at": "2026-10-08T23:28:13.987Z",
+            "delivered_at": null,
+            "items": [
+              {
+                "id": 44,
+                "order_id": 18,
+                "product_id": 7,
+                "quantity": 2,
+                "unit_price": 455,
+                "total_price": 910,
+                "product_name": "Lavazza Qualita Oro 1kg",
+                "product_unit": "كجم"
+              }
+            ],
+            "shippingZone": {
+              "id": 1,
+              "name": "القاهرة",
+              "shipping_cost": 30,
+              "is_active": true,
+              "display_order": 0,
+              "created_at": "2026-10-08T19:18:39.301Z",
+              "updated_at": "2026-10-08T19:18:39.301Z"
+            },
+            "user": {
+              "id": 5,
+              "name": "Tawreed QA Test",
+              "shop_name": "QA Test Store",
+              "phone": "+12025550117",
+              "email": "qa@example.com",
+              "address": "Test account - no delivery"
+            }
+          }
+        ],
+        "page": 1,
+        "per_page": 20,
+        "next_page": null,
+        "last_page": 1,
+        "total": 1
+      }
+    }
+
+NUMBER TYPES
+  JSON NUMBERS, ROUNDED TO WHOLE NUMBERS:
+      subtotal, discount_amount, shipping_fee, total_amount,
+      items[].unit_price, items[].total_price,
+      shippingZone.shipping_cost
+  DECIMAL STRINGS: delivery_lat, delivery_lng
+  total_amount = subtotal - discount_amount + shipping_fee
+
+  `user` here does NOT include `status` — only the detail route adds it.
+  `coupon` is NOT included on the list route — only the detail route.
+  payment_proof_image is a PRIVATE path, not a servable URL.
+
+ORDERING: created_at DESC (newest first). Not configurable.
+count() and findMany() share the same where clause, so `total` is accurate.
+
+ERRORS
+  400 ["per_page must not be greater than 100"]
+  400 ["status must be one of the following values: PENDING, CONFIRMED, ..."]
+  400 ["from must be a valid ISO 8601 date string"]
+  400 ["property foo should not exist"]
+  401 / 403
+
+================================================================================
+4.2  GET /order/admin/cancelled
+================================================================================
+Role: ADMIN. No params, no body.
+
+SUCCESS 200 — a PLAIN ARRAY (NOT paginated), same object shape as a list item
+    {
+      "message": "Success",
+      "data": [
+        { "id": 12, "status": "CLIENTCANCELLED", "...": "..." },
+        { "id": 9,  "status": "CANCELLED",       "...": "..." }
+      ]
+    }
+
+Returns orders whose status is CANCELLED **or** CLIENTCANCELLED, ordered by
+created_at DESC, with items, shippingZone and user (without `status`) included.
+
+GOTCHA: this route is deliberately left UNPAGINATED for backward compatibility,
+so it grows without bound. The equivalent paginated query is
+    GET /order/admin?status=CANCELLED
+    GET /order/admin?status=CLIENTCANCELLED
+but note those can only filter ONE status at a time, which is exactly why this
+combined route still exists. Prefer it for the "cancelled" tab, but be aware of
+the size.
+
+ERRORS
+  401 / 403
+
+================================================================================
+4.3  GET /order/admin/:id
+================================================================================
+Role: ADMIN. The full record for the review screen.
+
+PATH PARAMS
+id | int | REQUIRED | must be a positive integer
+
+SUCCESS 200 — everything, including `coupon` and `user.status`
+    {
+      "message": "Success",
+      "data": {
+        "id": 18,
+        "user_id": 5,
+        "coupon_id": 1,
+        "shipping_zone_id": 1,
+        "status": "PENDING",
+        "payment_method": "CARD",
+        "payment_status": "PENDING",
+        "payment_proof_image": "private-uploads/payment-proofs/7b2f....jpg",
+        "subtotal": 910,
+        "discount_amount": 91,
+        "shipping_fee": 30,
+        "total_amount": 849,
+        "delivery_address": "12 Tahrir St, Cairo",
+        "delivery_lat": "30.0444196",
+        "delivery_lng": "31.2357116",
+        "delivery_notes": "Call on arrival",
+        "created_at": "2026-10-08T23:28:13.987Z",
+        "updated_at": "2026-10-08T23:28:13.987Z",
+        "delivered_at": null,
+        "items": [
+          {
+            "id": 44,
+            "order_id": 18,
+            "product_id": 7,
+            "quantity": 2,
+            "unit_price": 455,
+            "total_price": 910,
+            "product_name": "Lavazza Qualita Oro 1kg",
+            "product_unit": "كجم"
+          }
+        ],
+        "shippingZone": {
+          "id": 1,
+          "name": "القاهرة",
+          "shipping_cost": 30,
+          "is_active": true,
+          "display_order": 0,
+          "created_at": "2026-10-08T19:18:39.301Z",
+          "updated_at": "2026-10-08T19:18:39.301Z"
+        },
+        "user": {
+          "id": 5,
+          "name": "Tawreed QA Test",
+          "shop_name": "QA Test Store",
+          "phone": "+12025550117",
+          "email": "qa@example.com",
+          "address": "Test account - no delivery",
+          "status": "ACTIVE"
+        },
+        "coupon": {
+          "id": 1,
+          "code": "WELCOME10",
+          "discount_value": 10
+        }
+      }
+    }
+
+EXTRAS vs the list route
+  user.status   "ACTIVE" | "BANNED" — lets you see at a glance that the buyer is
+                banned (ban them from admin.customers.txt).
+  coupon        { id, code, discount_value } or NULL when no coupon was used.
+                discount_value is converted to a JSON NUMBER here (unlike
+                GET /coupon, which returns it as a Decimal string).
+
+ERRORS
+  400 "Invalid order id"
+  404 "Order not found"
+  401 / 403
+
+NOTE: the order items snapshot `product_name` and `product_unit`, so they render
+correctly even if the product was later renamed or soft-deleted. `product_id` is
+still there if you want to link to the product page.
+
+================================================================================
+4.4  PATCH /order/:id
+================================================================================
+Role: ADMIN
+Content-Type: application/json
+
+Changes the FULFILMENT status only.
+
+PATH PARAMS
+id | int | REQUIRED | must be a positive integer
+
+BODY
+status | enum | REQUIRED | one of PENDING, CONFIRMED, PROCESSING, SHIPPED,
+                           DELIVERED, CANCELLED, CLIENTCANCELLED
+
+This is the ONLY field accepted. Sending anything else returns 400.
+
+REQUEST EXAMPLE
+    { "status": "SHIPPED" }
+
+SUCCESS 200 — the updated order with items, shippingZone and user
+    {
+      "message": "Success",
+      "data": {
+        "id": 18,
+        "status": "SHIPPED",
+        "subtotal": 910,
+        "discount_amount": 91,
+        "shipping_fee": 30,
+        "total_amount": 849,
+        "items": [ { "...": "..." } ],
+        "shippingZone": { "...": "..." },
+        "user": {
+          "id": 5,
+          "name": "Tawreed QA Test",
+          "shop_name": "QA Test Store",
+          "phone": "+12025550117",
+          "email": "qa@example.com",
+          "address": "Test account - no delivery"
+        }
+      }
+    }
+
+  `user` here has NO `status` field, and there is NO `coupon` key.
+
+ERRORS
+  400 "Invalid order id"
+  400 ["status must be one of the following values: PENDING, CONFIRMED,
+        PROCESSING, SHIPPED, DELIVERED, CANCELLED, CLIENTCANCELLED"]
+  400 ["property payment_status should not exist"]   (use the dedicated route)
+  404 "Order not found"
+  401 / 403
+
+BUSINESS RULES / GOTCHAS
+  - NO TRANSITION VALIDATION. Any status -> any status is accepted, including
+    going backwards and setting CLIENTCANCELLED as an admin. Gate the workflow
+    in the UI.
+  - Setting CANCELLED does NOT refund the coupon usage, does NOT restore stock
+    (there is no stock), and does NOT touch payment_status.
+  - `delivered_at` is NOT set when you move to DELIVERED.
+  - A push notification (data.type ORDER_STATUS_UPDATED) is sent to all of the
+    buyer's devices.
+    >>> KNOWN BUG: unlike every other notification call in the codebase, THIS
+    >>> ONE IS NOT WRAPPED IN try/catch. If Firebase throws, the HTTP request
+    >>> fails with 500 even though the status change has ALREADY been committed.
+    >>> On a 500 from this endpoint, refetch the order before retrying — the
+    >>> change may have gone through.
+
+================================================================================
+4.5  PATCH /order/:id/payment-status
+================================================================================
+Role: ADMIN
+Content-Type: application/json
+
+Approve or reject an uploaded bank-transfer receipt.
+
+PATH PARAMS
+id | int | REQUIRED | must be a positive integer
+
+BODY
+payment_status | enum | REQUIRED | "APPROVED" or "REJECTED" ONLY
+
+>>> "PENDING" IS DELIBERATELY NOT ACCEPTED here. It is the schema default and is
+>>> restored only by the client's re-upload flow. Sending it returns
+>>> 400 ["payment_status must be one of the following values: APPROVED,
+>>> REJECTED"].
+
+REQUEST EXAMPLE
+    { "payment_status": "REJECTED" }
+
+SUCCESS 200 — the updated order with items, shippingZone and user
+    {
+      "message": "Success",
+      "data": {
+        "id": 18,
+        "payment_method": "CARD",
+        "payment_status": "REJECTED",
+        "payment_proof_image": "private-uploads/payment-proofs/7b2f....jpg",
+        "status": "PENDING",
+        "subtotal": 910,
+        "discount_amount": 91,
+        "shipping_fee": 30,
+        "total_amount": 849,
+        "items": [ { "...": "..." } ],
+        "shippingZone": { "...": "..." },
+        "user": { "id": 5, "name": "Tawreed QA Test", "...": "..." }
+      }
+    }
+
+ERRORS
+  400 "Invalid order id"
+  400 ["payment_status must be one of the following values: APPROVED, REJECTED"]
+  404 "Order not found"
+  409 "Only card orders with an uploaded payment proof can be reviewed"
+      Returned when payment_method is not CARD, OR payment_proof_image is null.
+  401 / 403
+
+BUSINESS RULES
+  - ONLY CARD ORDERS WITH A RECEIPT can be reviewed. A CASH order always 409s.
+  - REJECTED unlocks the client's re-upload: they may call
+    PATCH /order/:id/payment-proof, which stores the new file and sets
+    payment_status back to PENDING for you to review again. That loop can repeat
+    indefinitely.
+  - APPROVED is not final in the data model — you can still set REJECTED
+    afterwards. There is no lock.
+  - This does NOT change the fulfilment `status`. Approving a payment does not
+    confirm the order; use PATCH /order/:id for that.
+  - A push notification (data.type PAYMENT_STATUS_UPDATED, with a
+    `payment_status` key) is sent to the buyer's devices. This call IS wrapped
+    in try/catch, so a push failure can never fail the request.
+
+TYPICAL REVIEW LOOP
+    GET /order/admin?payment_method=CARD&payment_status=PENDING
+    GET /order/admin/:id                  -> see the order
+    GET /order/:id/payment-proof          -> look at the receipt
+    PATCH /order/:id/payment-status       -> APPROVED or REJECTED
+    then PATCH /order/:id { status: "CONFIRMED" } to progress fulfilment
+
+================================================================================
+4.6  GET /order/:id/payment-proof
+================================================================================
+Role: ADMIN or CLIENT (a CLIENT may only read their OWN order's receipt)
+
+Returns the RAW IMAGE BYTES. NOT wrapped in the { message, data } envelope —
+it streams the file with res.sendFile.
+
+PATH PARAMS
+id | int | REQUIRED | must be a positive integer
+
+SUCCESS 200
+    Content-Type: image/jpeg (or png/webp, from the stored file)
+    <binary image data>
+
+Because an Authorization header is required, you cannot use a bare <img src>.
+Fetch it as a blob:
+
+    const res  = await fetch(`${baseUrl}/order/${id}/payment-proof`,
+                             { headers: { Authorization: `Bearer ${token}` } });
+    const blob = await res.blob();
+    imgEl.src  = URL.createObjectURL(blob);
+
+ERRORS (normal JSON — thrown before streaming begins)
+  400 "Invalid order id"
+  404 "Order not found"          (unknown id; for a CLIENT also "not mine")
+  404 "Payment proof not found"  (no receipt stored, the stored path failed the
+                                  path-traversal guard, or the file is missing
+                                  on disk)
+  401 / 403
+
+BUSINESS RULES
+  - Receipts live OUTSIDE the public uploads root, under
+    private-uploads/payment-proofs/, which is NOT served statically. This
+    endpoint is the only way to read one. Never build a URL from
+    payment_proof_image.
+  - An ADMIN can read any order's receipt; a CLIENT only their own
+    (ownership is checked against req.user.sub).
+  - The old receipt is deleted from disk when the client re-uploads, so only the
+    CURRENT receipt is retrievable. There is no history of rejected receipts.
+
+
+5. WHAT THE ADMIN CANNOT DO
+--------------------------------------------------------------------------------
+No endpoint exists to:
+  - edit an order's items, quantities, prices, totals, address or notes
+  - change the coupon on an existing order, or refund a coupon use
+  - change payment_method after creation
+  - delete an order (there is no DELETE route at all)
+  - set payment_status back to PENDING (only the client's re-upload does that)
+  - set delivered_at
+  - create an order on a customer's behalf (POST /order is @Roles(CLIENT))
+
+
+6. CHANGELOG vs THE OLD doc/ FOLDER
+--------------------------------------------------------------------------------
+BREAKING
+- GET /order/admin is now a PAGINATED OBJECT
+  ({ items, page, per_page, next_page, last_page, total }) and defaults to
+  per_page = 20. doc/order.admin.txt documented it as a plain array, so a
+  dashboard that expected every order in one call now silently shows 20.
+- GET /order/admin/cancelled is UNCHANGED and still returns a plain array. The
+  two sibling routes now have different response shapes — do not share a parser.
+
+NEW
+- GET /order/admin/:id (full detail with `coupon` and `user.status`) did not
+  exist; the dashboard previously had to find an order inside the list.
+- PATCH /order/:id/payment-status (approve / reject a receipt) did not exist.
+- GET /order/:id/payment-proof (view the receipt) did not exist.
+- GET /order/admin gained page, per_page, status, payment_status,
+  payment_method, user_id, from and to filters.
+
+CORRECTED
+- doc/AI_RULES.txt §15 declared the whole Order module "UNKNOWN / PENDING — the
+  src/order module is not yet implemented". It is fully implemented. That
+  section has been rewritten in the relocated AI_RULES.txt at the repo root.
+- Receipts are stored under private-uploads/ and are not statically served. The
+  old docs implied payment_proof_image was a normal /uploads/... URL.
+- `delivered_at` is documented as permanently null — no code sets it.
+- Newly flagged: PATCH /order/:id has an UNWRAPPED notification call, so a
+  Firebase failure returns 500 after the status has already been committed.

@@ -1,0 +1,257 @@
+================================================================================
+FLUTTER — AUTH MODULE
+================================================================================
+
+1. MODULE
+--------------------------------------------------------------------------------
+Client account creation, login, token refresh, logout, and FCM device-token
+registration. Backed by src/auth/. Passwords are bcrypt-hashed (10 rounds).
+Access tokens last 15 minutes; refresh tokens last 30 days and rotate on every
+use. Used by: the Signup/Login screen (first screen of the app) and by the
+global HTTP interceptor that performs the silent refresh.
+
+
+2. ENDPOINT SUMMARY
+--------------------------------------------------------------------------------
+METHOD | PATH                | ROLE   | PURPOSE
+-------|---------------------|--------|-------------------------------------------
+POST   | /auth/signup        | public | Create a CLIENT account, returns tokens
+POST   | /auth/login         | public | Log in by email, returns tokens
+POST   | /auth/refresh       | public | Exchange a refresh token for a new pair
+POST   | /auth/logout        | public | Revoke one refresh token
+PATCH  | /auth/fcm-token     | CLIENT | Register / move an FCM device token
+
+Note: /auth/adminDashboard/login and /auth/adminDashboard/signup exist but are
+for the web dashboard. The mobile app must not use them.
+
+
+3. ENDPOINTS
+--------------------------------------------------------------------------------
+
+================================================================================
+3.1  POST /auth/signup
+================================================================================
+Role: public (@Public)
+Content-Type: application/json
+
+BODY
+name        | string  | REQUIRED | min length 2
+email       | string  | REQUIRED | must be a valid email
+                                   (REQUIRED as of this version — see CHANGELOG)
+phone       | string  | REQUIRED | must match /^\+?[1-9]\d{7,14}$/
+                                   i.e. optional leading '+', first digit 1-9,
+                                   then 7..14 more digits. Examples:
+                                   "+201012345678", "201012345678"
+password    | string  | REQUIRED | min length 8
+shop_name   | string  | optional | min length 2
+address     | string  | optional | any string
+latitude    | number  | optional | max 7 decimal places
+longitude   | number  | optional | max 7 decimal places
+fcm_token   | string  | optional | non-empty. Registers the device immediately.
+platform    | string  | optional | non-empty, e.g. "android" / "ios"
+
+The role is always set to CLIENT server-side. You cannot choose a role.
+
+REQUEST EXAMPLE
+    {
+      "name": "Ahmed Mahmoud",
+      "email": "ahmed@example.com",
+      "phone": "+201012345678",
+      "password": "supersecret1",
+      "shop_name": "Ahmed Cafe",
+      "address": "12 Tahrir St, Cairo",
+      "latitude": 30.0444196,
+      "longitude": 31.2357116,
+      "fcm_token": "fMEa9...device-token",
+      "platform": "android"
+    }
+
+SUCCESS 201
+    {
+      "message": "Success",
+      "data": {
+        "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+        "refresh_token": "Yk3Jd8QmR0xT...base64url",
+        "user": {
+          "id": 12,
+          "name": "Ahmed Mahmoud",
+          "email": "ahmed@example.com",
+          "phone": "+201012345678",
+          "role": "CLIENT"
+        }
+      }
+    }
+
+Note: the user object returned here contains ONLY those five fields. It does not
+include shop_name / address / latitude / longitude — fetch GET /profile for
+those.
+
+ERRORS
+  400 validation array, e.g.
+      ["name must be longer than or equal to 2 characters",
+       "email must be an email",
+       "phone must be a valid international phone number",
+       "password must be longer than or equal to 8 characters"]
+  409 "Email already exists"
+  409 "Phone number already exists"
+  409 "<field> already exists"      (race on the unique index)
+
+================================================================================
+3.2  POST /auth/login
+================================================================================
+Role: public (@Public)
+Content-Type: application/json
+
+Login is BY EMAIL ONLY. There is no phone login.
+
+BODY
+email      | string | REQUIRED | valid email
+password   | string | REQUIRED | min length 8
+fcm_token  | string | optional | non-empty, registers this device
+platform   | string | optional | non-empty
+
+REQUEST EXAMPLE
+    {
+      "email": "ahmed@example.com",
+      "password": "supersecret1",
+      "fcm_token": "fMEa9...device-token",
+      "platform": "android"
+    }
+
+SUCCESS 200 — identical shape to signup
+    {
+      "message": "Success",
+      "data": {
+        "access_token": "eyJhbGciOi...",
+        "refresh_token": "Yk3Jd8QmR0xT...",
+        "user": {
+          "id": 12,
+          "name": "Ahmed Mahmoud",
+          "email": "ahmed@example.com",
+          "phone": "+201012345678",
+          "role": "CLIENT"
+        }
+      }
+    }
+
+ERRORS
+  400 validation array
+  401 "Invalid email or password"   (unknown email OR wrong password — the same
+                                     message is used for both on purpose)
+  403 "Account is banned"           (credentials were correct but status=BANNED)
+
+GOTCHA: the login handler does not restrict the role. An ADMIN could log in here
+and receive a token whose role is ADMIN. The mobile app should check
+data.user.role == "CLIENT" and refuse anything else.
+
+================================================================================
+3.3  POST /auth/refresh
+================================================================================
+Role: public (@Public)
+Content-Type: application/json
+
+BODY
+refresh_token | string | REQUIRED | non-empty
+
+REQUEST EXAMPLE
+    { "refresh_token": "Yk3Jd8QmR0xT...base64url" }
+
+SUCCESS 200 — a NEW access token AND a NEW refresh token
+    {
+      "message": "Success",
+      "data": {
+        "access_token": "eyJhbGciOi...new...",
+        "refresh_token": "Pq7Lm2Zc...new...",
+        "user": {
+          "id": 12,
+          "name": "Ahmed Mahmoud",
+          "email": "ahmed@example.com",
+          "phone": "+201012345678",
+          "role": "CLIENT"
+        }
+      }
+    }
+
+ERRORS
+  400 ["refresh_token should not be empty"]
+  401 "Invalid or expired refresh token"     (unknown, revoked, or past 30 days)
+  401 "Refresh token has already been used"  (replay / concurrent refresh)
+  403 "Account is banned"                    (checked before issuing new tokens)
+
+BUSINESS RULES
+  - SINGLE USE. The token you send is revoked and replaced. Always overwrite
+    both stored tokens with the response.
+  - Serialise refreshes behind a mutex. Two parallel refreshes with the same
+    token guarantee one 401 "Refresh token has already been used".
+  - The ban check happens here, so banning takes effect within 15 minutes.
+
+================================================================================
+3.4  POST /auth/logout
+================================================================================
+Role: public (@Public)
+Content-Type: application/json
+
+BODY
+refresh_token | string | REQUIRED | non-empty
+
+SUCCESS 200
+    { "message": "Success", "data": { "success": true } }
+
+Always returns success, even for an unknown or already-revoked token (it is an
+idempotent updateMany). Clear your local tokens regardless of the result.
+
+Only the ONE refresh token you pass is revoked. Other devices stay logged in.
+To kill every session, change the password (PATCH /profile/password).
+
+ERRORS
+  400 ["refresh_token should not be empty"]
+
+================================================================================
+3.5  PATCH /auth/fcm-token
+================================================================================
+Role: CLIENT
+Content-Type: application/json
+
+Registers (or re-points) one FCM device token to the logged-in user. Use this
+when the FCM token rotates after login, or if you did not send fcm_token in the
+login body. See flutter.notification.txt for the full push contract.
+
+BODY
+fcm_token | string | REQUIRED | non-empty
+platform  | string | optional | non-empty, e.g. "android" / "ios"
+
+REQUEST EXAMPLE
+    { "fcm_token": "fMEa9...device-token", "platform": "android" }
+
+SUCCESS 200
+    { "message": "Success", "data": { "success": true } }
+
+ERRORS
+  400 ["fcm_token should not be empty"]
+  401 Unauthorized
+  403 "You do not have the required roles to access this resource"
+
+BUSINESS RULES
+  - The token is UPSERTED on the token value itself, which is globally unique.
+    Registering a token that currently belongs to another user MOVES it to the
+    caller. This is what makes shared/reinstalled devices behave correctly.
+  - One user can have many devices. Pushes go to all of them.
+  - Tokens are never auto-removed. There is no unregister endpoint.
+
+
+4. CHANGELOG vs THE OLD doc/ FOLDER
+--------------------------------------------------------------------------------
+BREAKING
+- `email` is now REQUIRED on POST /auth/signup. The old doc/flutter.auth.txt and
+  doc/auth.txt documented it as optional. Signing up without an email now
+  returns 400 ["email must be an email"].
+- Login and refresh now return 403 "Account is banned" for a banned user. This
+  status/message did not exist in the old docs.
+
+CORRECTED
+- Token lifetimes: access 15 minutes, refresh 30 days with single-use rotation.
+  doc/AI_RULES.txt claimed tokens were signed for 3650d with no refresh
+  mechanism.
+- There is no phone-based login. Some old notes implied "Email/Phone & Password".
+- POST /auth/logout is @Public and takes refresh_token in the body (it does not
+  rely on the Authorization header).

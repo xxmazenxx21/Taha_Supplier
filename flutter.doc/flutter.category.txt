@@ -1,0 +1,141 @@
+================================================================================
+FLUTTER — CATEGORY MODULE
+================================================================================
+
+1. MODULE
+--------------------------------------------------------------------------------
+Top level of the catalog. A Category holds many SubCategories; SubCategories
+hold Products. Backed by src/category/. Used by: the Home screen (the
+categories row, which comes from GET /home — you do not need a separate call)
+and the Category page, which shows the sub-category circles plus every product
+in the category.
+
+
+2. ENDPOINT SUMMARY
+--------------------------------------------------------------------------------
+METHOD | PATH            | ROLE          | PURPOSE
+-------|-----------------|---------------|----------------------------------
+GET    | /category       | any logged-in | All visible categories (flat)
+GET    | /category/:id   | any logged-in | One visible category + its visible
+       |                 |               | sub-categories
+
+Both handlers carry NO @Roles decorator. With the global guards that means any
+authenticated user passes, CLIENT included. They are NOT @Public — a token is
+still required.
+
+
+3. ENDPOINTS
+--------------------------------------------------------------------------------
+
+================================================================================
+3.1  GET /category
+================================================================================
+Role: any authenticated user. No params, no body.
+
+SUCCESS 200 — a plain array, no pagination
+    {
+      "message": "Success",
+      "data": [
+        {
+          "id": 1,
+          "name": "المواد الخام",
+          "display_order": 0,
+          "image": "/uploads/categories/f35c6fd7-....png",
+          "is_hidden": false,
+          "created_at": "2026-10-06T17:03:46.796Z"
+        },
+        {
+          "id": 2,
+          "name": "المطبخ",
+          "display_order": 1,
+          "image": "/uploads/categories/f7985470-....png",
+          "is_hidden": false,
+          "created_at": "2026-10-06T17:03:46.803Z"
+        }
+      ]
+    }
+
+FIELD NOTES
+  image        string or null — SERVER-RELATIVE, prefix with the base URL
+  is_hidden    always false here (hidden rows are filtered out)
+  No updated_at column exists on Category.
+  Sub-categories are NOT included — use GET /category/:id.
+
+ORDERING: display_order ASC.
+FILTER: only is_hidden = false.
+
+ERRORS
+  401 Unauthorized
+
+================================================================================
+3.2  GET /category/:id
+================================================================================
+Role: any authenticated user
+
+PATH PARAMS
+id | int | REQUIRED | parsed with unary + (non-numeric becomes NaN -> 404)
+
+SUCCESS 200 — the category with its VISIBLE sub-categories nested
+    {
+      "message": "Success",
+      "data": {
+        "id": 1,
+        "name": "المواد الخام",
+        "display_order": 0,
+        "image": "/uploads/categories/f35c6fd7-....png",
+        "is_hidden": false,
+        "created_at": "2026-10-06T17:03:46.796Z",
+        "subcategories": [
+          {
+            "id": 1,
+            "name": "قهوة",
+            "display_order": 0,
+            "image": "/uploads/sub-category/dd489d82-....jpeg",
+            "category_id": 1,
+            "is_hidden": false,
+            "created_at": "2026-10-06T17:03:46.820Z"
+          },
+          {
+            "id": 2,
+            "name": "دقيق",
+            "display_order": 1,
+            "image": "/uploads/sub-category/1b544714-....jpeg",
+            "category_id": 1,
+            "is_hidden": false,
+            "created_at": "2026-10-06T17:03:46.828Z"
+          }
+        ]
+      }
+    }
+
+ERRORS
+  404 "Category not found"   (missing id OR the category is hidden)
+  401 Unauthorized
+
+BUSINESS RULES / GOTCHAS
+  - A HIDDEN CATEGORY RETURNS 404, not an object with is_hidden = true. The
+    lookup is findFirst({ id, is_hidden: false }).
+  - Nested subcategories are filtered to is_hidden = false as well, so a hidden
+    sub-category simply will not appear in the array.
+  - subcategories is NOT sorted by display_order on this endpoint (no orderBy is
+    applied to the nested include, so Postgres returns them in an arbitrary,
+    usually insertion, order). If the circles must respect display_order, SORT
+    THEM CLIENT-SIDE. GET /sub-category does sort correctly.
+  - The array can be empty for a category with no visible sub-categories.
+
+CATEGORY PAGE RECIPE
+    GET /category/:id                -> header + sub-category circles
+    GET /product?category_id=:id     -> all products of the category
+    (the two calls are independent; fire them in parallel)
+
+
+4. CHANGELOG vs THE OLD doc/ FOLDER
+--------------------------------------------------------------------------------
+CORRECTED
+- doc/category.txt described GET /category as an ADMIN-only dashboard route
+  returning hidden categories and nested subcategories. That was wrong for this
+  path: plain GET /category is the public/client list and returns only visible
+  rows WITHOUT subcategories. The admin list is now a separate route,
+  GET /category/admin (see admin.doc/admin.category.txt).
+- Category has no `updated_at` column, and `name` is NOT unique in the Prisma
+  schema. doc/AI_RULES.txt listed both incorrectly.

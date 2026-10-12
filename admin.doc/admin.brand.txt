@@ -1,0 +1,386 @@
+================================================================================
+ADMIN — BRAND MODULE (includes sub-category linking / unlinking)
+================================================================================
+
+1. MODULE
+--------------------------------------------------------------------------------
+Product brands. A Brand owns many Products and is linked to many SubCategories
+through the BrandSubCategory join table — and the join table is managed from
+THIS module only (there is no endpoint on the sub-category side). Brands use
+SOFT DELETE via deleted_at. Backed by src/brand/. Used by: the Brands page
+(list, create, edit form, soft delete, and the "which sub-categories does this
+brand sell in" picker).
+
+
+2. ENDPOINT SUMMARY
+--------------------------------------------------------------------------------
+METHOD | PATH                                           | ROLE          | PURPOSE
+-------|------------------------------------------------|---------------|---------
+GET    | /brand/admin                                   | ADMIN         | List, no relations
+POST   | /brand                                         | ADMIN         | Create (multipart)
+PATCH  | /brand/:id                                     | ADMIN         | Update (multipart)
+DELETE | /brand/:id                                     | ADMIN         | SOFT delete
+POST   | /brand/:id/subcategories                       | ADMIN         | Link sub-categories
+DELETE | /brand/:id/subcategories/:subcategoryId        | ADMIN         | Unlink one
+GET    | /brand                                         | any logged-in | Client list
+GET    | /brand/:id                                     | any logged-in | Detail (+links)
+
+There is NO admin-only "get one brand" route. Use GET /brand/:id for the edit
+form — it returns the links you need and is readable by an ADMIN token.
+'admin' is declared before ':id' in the controller — correct.
+
+
+3. ENDPOINTS
+--------------------------------------------------------------------------------
+
+================================================================================
+3.1  GET /brand/admin
+================================================================================
+Role: ADMIN. No params, no body.
+
+SUCCESS 200 — plain array (NOT paginated), WITHOUT sub-category links
+    {
+      "message": "Success",
+      "data": [
+        {
+          "id": 3,
+          "name": "نسكافيه (Nescafé)",
+          "logo": "/uploads/brands/916a56bd-....jpg",
+          "created_at": "2026-10-06T17:03:46.849Z",
+          "updated_at": "2026-10-06T17:03:46.849Z"
+        },
+        {
+          "id": 1,
+          "name": "دي بيكر (Debic)",
+          "logo": "/uploads/brands/ca1f7d26-....png",
+          "created_at": "2026-10-06T17:03:46.840Z",
+          "updated_at": "2026-10-06T17:03:46.840Z"
+        }
+      ]
+    }
+
+ORDERING: created_at DESC (newest first). Brand has no display_order column.
+FILTER: deleted_at = null — SOFT-DELETED BRANDS ARE EXCLUDED EVEN HERE. Unlike
+the category/sub-category admin lists, there is NO way to list or restore a
+soft-deleted brand through the API.
+Only those five fields are selected (no brandSubCategories, no deleted_at).
+
+ERRORS
+  401 / 403
+
+================================================================================
+3.2  GET /brand/:id   (use for the edit form)
+================================================================================
+Role: any authenticated user (an ADMIN token works)
+
+PATH PARAMS
+id | int | REQUIRED | parsed with unary + (non-numeric -> NaN -> 404)
+
+SUCCESS 200 — includes the sub-category links
+    {
+      "message": "Success",
+      "data": {
+        "id": 2,
+        "name": "لافازا (Lavazza)",
+        "logo": "/uploads/brands/8c11abb7-....png",
+        "created_at": "2026-10-06T17:03:46.845Z",
+        "updated_at": "2026-10-06T17:03:46.845Z",
+        "deleted_at": null,
+        "brandSubCategories": [
+          {
+            "id": 1,
+            "brand_id": 2,
+            "subcategory_id": 1,
+            "subCategory": {
+              "id": 1,
+              "name": "قهوة",
+              "image": "/uploads/sub-category/dd489d82-....jpeg"
+            }
+          }
+        ]
+      }
+    }
+
+To render the "linked sub-categories" chips:
+    data.brandSubCategories.map(l => l.subCategory)
+Each link's own `id` is the BrandSubCategory row id — you do NOT need it to
+unlink (the unlink route takes the SUBCATEGORY id).
+
+ERRORS
+  404 "Brand not found"   (unknown id OR deleted_at is set)
+  401 / 403
+
+================================================================================
+3.3  POST /brand
+================================================================================
+Role: ADMIN
+Content-Type: multipart/form-data
+
+FORM FIELDS
+name            | string   | REQUIRED | min length 2
+subcategory_ids | number[] | optional | array, NOT empty if sent, unique values,
+                                        every element an integer. Links are
+                                        created immediately.
+
+FILE FIELD
+logo | file | REQUIRED | field name `logo`, max count 1
+                         allowed: image/jpeg, image/jpg, image/png, image/webp
+                         >>> MAX SIZE 5 MB — NOT 10 MB. This endpoint adds a
+                         >>> ParseFilePipe with MaxFileSizeValidator(5MB) on top
+                         >>> of Multer's 10 MB. Brand logos are the only upload
+                         >>> in the system with a 5 MB ceiling.
+
+`logo` is REQUIRED because Brand.logo is a non-nullable column.
+
+SENDING subcategory_ids OVER MULTIPART: the DTO expects a real array. In a
+multipart body, send a JSON-looking value:
+    subcategory_ids: [1,2]
+(this is how doc/brand.txt's curl example did it and it is what the DTO
+validation accepts after transformation). If you get
+["each value in subcategory_ids must be an integer number"], switch to repeating
+the field or sending the brand without links and calling
+POST /brand/:id/subcategories afterwards — that path takes clean JSON and is
+the more reliable option.
+
+REQUEST EXAMPLE
+    POST /brand
+    Content-Type: multipart/form-data
+      name:            لافازا (Lavazza)
+      subcategory_ids: [1]
+      logo:            <lavazza.png binary>
+
+SUCCESS 201 — the created brand WITHOUT the links
+    {
+      "message": "Success",
+      "data": {
+        "id": 2,
+        "name": "لافازا (Lavazza)",
+        "logo": "/uploads/brands/8c11abb7-....png",
+        "created_at": "2026-10-06T17:03:46.845Z",
+        "updated_at": "2026-10-06T17:03:46.845Z",
+        "deleted_at": null
+      }
+    }
+
+Refetch GET /brand/:id if you need to show the links you just created.
+
+ERRORS
+  400 ["name must be longer than or equal to 2 characters"]
+  400 ["subcategory_ids should not be empty"]        (you sent [])
+  400 ["All subcategory_ids's elements must be unique"]
+  400 ["each value in subcategory_ids must be an integer number"]
+  400 ["Validation failed (expected size is less than 5242880)"]  (logo > 5 MB)
+  400 ["Validation failed (expected type is /^image\/(jpeg|jpg|png|webp)$/)"]
+  400 "Unexpected field - image"   (the field must be named `logo`)
+  404 `Subcategories not found: 999`   (one or more ids do not exist — the
+                                        uploaded logo is deleted first)
+  409 "Brand with this name already exists"   (name IS unique in the schema;
+                                               the uploaded logo is deleted
+                                               first)
+  401 / 403
+
+BUSINESS RULES
+  - `name` IS unique at the database level (unlike category / sub-category).
+  - If the create fails for any reason the uploaded logo file is removed from
+    disk, so failed attempts leave no orphans.
+
+================================================================================
+3.4  PATCH /brand/:id
+================================================================================
+Role: ADMIN
+Content-Type: multipart/form-data
+All fields optional.
+
+PATH PARAMS
+id | int | REQUIRED | parsed with unary +
+
+FORM FIELDS
+name            | string   | optional | min length 2
+subcategory_ids | number[] | optional | ACCEPTED BY VALIDATION BUT IGNORED.
+                                        >>> This endpoint does NOT change links.
+                                        >>> Use POST /brand/:id/subcategories
+                                        >>> and DELETE .../subcategories/:id.
+
+FILE FIELD
+logo | file | optional | same rules as create, including the 5 MB cap.
+                         Replaces the logo; the old file is deleted from disk
+                         after the DB update succeeds.
+
+SUCCESS 200
+    {
+      "message": "Success",
+      "data": {
+        "id": 2,
+        "name": "لافازا (Lavazza) Updated",
+        "logo": "/uploads/brands/newlogo-....png",
+        "created_at": "2026-10-06T17:03:46.845Z",
+        "updated_at": "2026-10-08T11:02:44.100Z",
+        "deleted_at": null
+      }
+    }
+
+ERRORS
+  400 validation / file type / 5 MB size errors
+  404 "Brand not found"   (unknown or soft-deleted; the new logo is deleted
+                           first)
+  409 "Brand with this name already exists"   (another live brand has the name;
+                                               the new logo is deleted first)
+  401 / 403
+
+GOTCHA: `subcategory_ids` silently does nothing here. A dashboard that sends it
+expecting the links to be replaced will see no change and no error.
+
+================================================================================
+3.5  DELETE /brand/:id
+================================================================================
+Role: ADMIN. No body. SOFT DELETE.
+
+PATH PARAMS
+id | int | REQUIRED | parsed with unary +
+
+SUCCESS 200 — the row with deleted_at set
+    {
+      "message": "Success",
+      "data": {
+        "id": 2,
+        "name": "لافازا (Lavazza)",
+        "logo": "/uploads/brands/8c11abb7-....png",
+        "created_at": "2026-10-06T17:03:46.845Z",
+        "updated_at": "2026-10-08T11:10:00.000Z",
+        "deleted_at": "2026-10-08T11:10:00.000Z"
+      }
+    }
+
+ERRORS
+  404 "Brand not found"   (unknown id, or ALREADY soft-deleted — a second
+                           delete is a 404, not a no-op)
+  401 / 403
+
+BUSINESS RULES / GOTCHAS
+  - Sets deleted_at = now(). The row and the logo file both survive.
+  - >>> NOT REVERSIBLE THROUGH THE API. There is no restore endpoint and no
+    >>> list that shows deleted brands, so an accidental delete can only be
+    >>> undone directly in the database. Confirm destructively in the UI.
+  - The brand disappears from GET /brand, GET /brand/admin, GET /brand/:id and
+    the /home brands rail.
+  - Its PRODUCTS ARE NOT TOUCHED. They keep brand_id pointing at the deleted
+    brand and remain visible in GET /product (that endpoint only filters on
+    sub-category/category visibility and is_available). The product's embedded
+    `brand` object will still render. Hide or reassign the products separately.
+  - BrandSubCategory links are NOT removed, but GET /sub-category/:id filters
+    them out via brand.deleted_at = null.
+
+================================================================================
+3.6  POST /brand/:id/subcategories
+================================================================================
+Role: ADMIN
+Content-Type: application/json          <-- JSON, not multipart
+
+PATH PARAMS
+id | int | REQUIRED | parsed with unary + — the BRAND id
+
+BODY
+subcategory_ids | number[] | REQUIRED | array, must NOT be empty, values unique,
+                                        every element an integer
+
+REQUEST EXAMPLE
+    { "subcategory_ids": [1, 2, 3] }
+
+SUCCESS 201 — the brand with ALL of its links after the operation
+    {
+      "message": "Success",
+      "data": {
+        "id": 2,
+        "name": "لافازا (Lavazza)",
+        "logo": "/uploads/brands/8c11abb7-....png",
+        "created_at": "2026-10-06T17:03:46.845Z",
+        "updated_at": "2026-10-06T17:03:46.845Z",
+        "deleted_at": null,
+        "brandSubCategories": [
+          {
+            "id": 1,
+            "brand_id": 2,
+            "subcategory_id": 1,
+            "subCategory": {
+              "id": 1,
+              "name": "قهوة",
+              "display_order": 0,
+              "image": "/uploads/sub-category/dd489d82-....jpeg",
+              "category_id": 1,
+              "is_hidden": false,
+              "created_at": "2026-10-06T17:03:46.820Z"
+            }
+          }
+        ]
+      }
+    }
+
+  NOTE: `subCategory` here is the FULL sub-category row, unlike GET /brand/:id
+  which selects only { id, name, image }.
+
+ERRORS
+  400 ["subcategory_ids should not be empty"]
+  400 ["All subcategory_ids's elements must be unique"]
+  400 ["each value in subcategory_ids must be an integer number"]
+  404 "Brand not found"                 (unknown or soft-deleted brand)
+  404 `Subcategories not found: 999`    (comma-separated list of missing ids)
+  401 / 403
+
+BUSINESS RULES
+  - ADDITIVE, not a replace. Existing links are kept.
+  - IDEMPOTENT per id: createMany runs with skipDuplicates, so re-linking an
+    already-linked sub-category is silently ignored (no 409).
+  - Duplicate ids inside your array are rejected by validation before any write.
+  - Hidden sub-categories CAN be linked — no visibility check is performed.
+
+================================================================================
+3.7  DELETE /brand/:id/subcategories/:subcategoryId
+================================================================================
+Role: ADMIN. No body.
+
+PATH PARAMS
+id             | int | REQUIRED | the BRAND id (unary +)
+subcategoryId  | int | REQUIRED | the SUB-CATEGORY id (unary +), NOT the
+                                  BrandSubCategory row id
+
+SUCCESS 200
+    { "message": "Success", "data": { "deleted": true } }
+
+ERRORS
+  404 "Brand-subcategory relation not found"
+      Returned when the link does not exist. NOTE: this endpoint does NOT
+      check whether the brand itself exists, so a bad brand id also yields
+      this same message rather than "Brand not found".
+  401 / 403
+
+BUSINESS RULES
+  - Removes ONE link row (hard delete of the join row only). Neither the brand
+    nor the sub-category is affected.
+  - Not idempotent: deleting the same link twice returns 404 the second time.
+  - The brand's products under that sub-category are NOT touched.
+
+
+4. CHANGELOG vs THE OLD doc/ FOLDER
+--------------------------------------------------------------------------------
+BREAKING
+- The admin list moved from GET /brand to GET /brand/admin. The controller used
+  to declare TWO @Get() handlers on the bare path, and Express only reached the
+  first (the client list), so findAllForAdmin was unreachable dead code.
+  doc/brand.txt documented "GET /brand (dashboard list)" and even admitted it
+  was "defined in the controller as another GET /brand route" — it never worked.
+  Repoint the dashboard.
+
+CORRECTED
+- Brand has NO `display_order` and NO `is_hidden` column. doc/AI_RULES.txt
+  listed both. Removal is deleted_at only, and ordering is created_at DESC.
+- The brand logo limit really is 5 MB (enforced by a ParseFilePipe) while every
+  other upload allows 10 MB. The old docs said 5 MB everywhere, which was wrong
+  for the others and accidentally right here.
+- PATCH /brand/:id accepts `subcategory_ids` but IGNORES it. doc/brand.txt
+  hinted at this ("relationship changes are not managed here"); it is stated
+  explicitly above.
+- DELETE /brand/:id is documented as irreversible via the API — there is no
+  restore route and no listing that includes deleted brands.
+- DELETE /brand/:id/subcategories/:subcategoryId returns
+  "Brand-subcategory relation not found" even for a nonexistent brand; the old
+  doc listed a separate 404 "Brand not found" for that case.

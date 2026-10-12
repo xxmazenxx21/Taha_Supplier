@@ -1,0 +1,136 @@
+================================================================================
+FLUTTER (MOBILE APP) API DOCUMENTATION — INDEX
+Audience: the Flutter mobile app. Every endpoint here is callable with a token
+whose role is CLIENT.
+Source of truth: the current source code in src/ and prisma/models/.
+Last rebuilt from code: 2026-10-08
+================================================================================
+
+READ flutter.general.txt FIRST. It defines the base URL, headers, the
+{ message, data } envelope, the error shape, the 401 -> refresh flow, and which
+numeric fields come back as JSON numbers vs Decimal strings. Every other file
+assumes you already know those rules.
+
+--------------------------------------------------------------------------------
+FILES IN THIS FOLDER
+--------------------------------------------------------------------------------
+flutter.general.txt        Base URL, headers, envelope, errors, tokens, images,
+                           number vs Decimal-string reference table.
+flutter.auth.txt           POST /auth/signup, /auth/login, /auth/refresh,
+                           /auth/logout, PATCH /auth/fcm-token
+flutter.profile.txt        GET /profile, PATCH /profile, PATCH /profile/password
+flutter.home.txt           GET /home — the whole home screen in one call, plus
+                           banner click_action_type handling.
+flutter.category.txt       GET /category, GET /category/:id
+flutter.sub-category.txt   GET /sub-category, GET /sub-category/:id
+flutter.brand.txt          GET /brand, GET /brand/:id
+flutter.product.txt        GET /product (all filters, sort, pagination),
+                           GET /product/search, GET /product/:id.
+                           DEFINES THE PRODUCT_CARD SHAPE used by other files.
+flutter.review.txt         GET/POST /review/:productId,
+                           PATCH/DELETE /review/:productId/:reviewId
+flutter.cart.txt           GET /cart, POST /cart/items,
+                           PATCH/DELETE /cart/items/:id,
+                           POST /cart/apply-coupon, POST /cart/remove-coupon
+                           (coupon usage lives here — there is no client-facing
+                           coupon module)
+flutter.shipping-zone.txt  GET /shipping-zone
+flutter.order.txt          POST /order (multipart), GET /order, GET /order/:id,
+                           PATCH /order/:id/cancel,
+                           PATCH /order/:id/payment-proof,
+                           GET /order/:id/payment-proof
+flutter.banner.txt         GET /banner, GET /banner/:id (CLIENT may call these)
+flutter.notification.txt   FCM token registration + every push data.type the app
+                           can receive
+
+There is intentionally no flutter.coupon.txt: the /coupon module is ADMIN-only.
+The client only ever touches coupons through the cart (apply / remove).
+
+--------------------------------------------------------------------------------
+SCREEN FLOW (the order the app navigates in)
+--------------------------------------------------------------------------------
+
+1. Signup / Login
+     flutter.auth.txt
+     POST /auth/signup  or  POST /auth/login
+     -> store access_token (15 min) and refresh_token (30 days)
+     -> register the FCM token here (send fcm_token in the signup/login body,
+        or call PATCH /auth/fcm-token afterwards)
+
+2. Home
+     flutter.home.txt
+     GET /home
+     One call returns: banners, categories, offers, best_sellers, suggested,
+     reordered, brands. Render each section only when its array is non-empty.
+     Tapping a banner image follows its click_action_type.
+     Tapping a category -> step 3.
+
+3. Category page
+     flutter.category.txt  +  flutter.product.txt
+     GET /category/:id            -> the category and its sub-category circles
+     GET /product?category_id=<id> -> ALL products in that category
+     Tapping a sub-category circle -> step 4.
+
+4. Sub-category page
+     flutter.sub-category.txt  +  flutter.product.txt
+     GET /sub-category/:id                 -> the brand logos linked to it
+     GET /product?subcategory_id=<id>      -> its products
+     Tapping a brand logo -> step 5.
+
+5. Brand page — THE LAST LEVEL of the catalog drill-down
+     flutter.product.txt
+     GET /product?subcategory_id=<id>&brand_id=<id>
+     This is the deepest filter combination the app uses.
+     Tapping a product -> step 6.
+
+6. Product details
+     flutter.product.txt  +  flutter.review.txt
+     GET /product/:id              -> full details (includes description)
+     GET /review/:productId        -> reviews + the caller's own my_review
+     The user can add / edit / delete their single review here.
+     "Add to cart" -> step 7.
+
+7. Cart (+ coupon)
+     flutter.cart.txt
+     GET /cart                     -> items and live totals
+     POST /cart/items              -> add
+     PATCH /cart/items/:id         -> change quantity
+     DELETE /cart/items/:id        -> remove
+     POST /cart/apply-coupon       -> attach a coupon code
+     POST /cart/remove-coupon      -> detach it
+
+8. Checkout
+     flutter.shipping-zone.txt  +  flutter.order.txt
+     GET /shipping-zone            -> pick a delivery zone and see its cost
+     POST /order (multipart/form-data)
+       - payment_method = CASH  -> no file
+       - payment_method = CARD  -> the payment_proof image file is REQUIRED
+     A successful order empties the cart and detaches its coupon.
+
+9. My orders
+     flutter.order.txt
+     GET /order                    -> my order list
+     GET /order/:id                -> one of my orders
+     PATCH /order/:id/cancel       -> only within 48h and only while PENDING or
+                                      CONFIRMED
+     If payment_status becomes REJECTED:
+       PATCH /order/:id/payment-proof -> upload a new receipt
+     GET /order/:id/payment-proof  -> view the receipt (raw image bytes)
+
+SIDE SCREENS (reachable from anywhere, not part of the main flow)
+  Profile        flutter.profile.txt       GET/PATCH /profile, PATCH /profile/password
+  Notifications  flutter.notification.txt  FCM registration + push payloads
+
+--------------------------------------------------------------------------------
+ENDPOINTS THE APP MUST NOT CALL
+--------------------------------------------------------------------------------
+Everything under admin.doc/ is restricted to role ADMIN and will return
+403 Forbidden for a CLIENT token:
+  POST/PATCH/DELETE on /category, /sub-category, /brand, /product, /banner
+  the whole /coupon module
+  POST /shipping-zone, PATCH /shipping-zone/:id, GET /shipping-zone/admin*
+  GET /order/admin*, PATCH /order/:id, PATCH /order/:id/payment-status
+  /customers/admin*
+  POST /notification/broadcast
+  POST /auth/adminDashboard/login, POST /auth/adminDashboard/signup
+  GET /category/admin*, /sub-category/admin*, /product/admin*, /brand/admin

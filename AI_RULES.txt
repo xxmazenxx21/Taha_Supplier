@@ -17,7 +17,7 @@ before making changes.
 **Project Name**: Taha Supplier
 **Purpose**: An e-commerce / B2B supplier platform allowing users to browse products, manage carts, apply coupons, and place orders. 
 **Main Users**: Clients (cafe owners, users), Admins, Delivery personnel, Orders Staff, Accounts Staff, Support.
-**Development State**: Actively under development. Core catalog, cart, and coupon logic is implemented. **The Order flow is currently defined in the schema but its module logic (controllers/services) is PENDING/FUTURE WORK.**
+**Development State**: Actively under development. Core catalog, cart, coupon, **order, profile, customers (ban), banner and notification** logic is all implemented. The Order flow is fully built (creation with a serializable transaction, multipart payment-proof upload, admin status and payment-status review).
 
 ---
 
@@ -61,20 +61,27 @@ PostgreSQL
 ## 4. Repository Structure
 ```text
 src/
-  auth/           → Authentication, login, signup logic
+  auth/           → Authentication, login, signup, refresh tokens, FCM tokens
+  banner/         → Home banners and per-image click actions
   brand/          → Brand management
   cart/           → Cart management & dynamic coupon logic
   category/       → Main categories
   coupon/         → Admin coupon management
+  customers/      → Admin customer list/detail and the BAN feature
   decorators/     → Custom decorators (e.g., @Roles, @Public)
   guards/         → Auth and role guards
   interceptors/   → Global response formatter
+  notification/   → Firebase push sending (order, payment, broadcast)
+  order/          → Checkout, order history, admin status/payment review
   prisma/         → Prisma module/service
   product/        → Products, images, filtering, and search
+  profile/        → Client self-service profile and password change
   review/         → Product reviews
   shipping-zone/  → Shipping zones and costs
   sub-category/   → Sub-categories (linked to Category and Brand)
   utils/multer/   → File upload logic and disk storage constraints
+  utils/security/ → bcrypt hashPassword / comparePassword
+  utils/email/    → EMPTY placeholder — no email service exists
 
 prisma/
   schema.prisma   → Main Prisma file
@@ -102,19 +109,39 @@ Fields:
 - `block_reason`: String?
 - `created_at`: DateTime, default now()
 - `updated_at`: DateTime
-Relationships: One-to-one to `Cart`, One-to-many to `CouponUsage`, `Review`, `Order`.
+Relationships: One-to-one to `Cart`, One-to-many to `CouponUsage`, `Review`, `Order`, `UserDevice`, `RefreshToken`.
+
+### UserDevice
+Purpose: One registered FCM device token belonging to a user.
+Fields:
+- `id`: Int, PK
+- `user_id`: Int, FK to User (Cascade delete)
+- `token`: String, unique (globally — re-registering moves it between users)
+- `platform`: String?
+- `created_at`: DateTime
+- `updated_at`: DateTime
+
+### RefreshToken
+Purpose: Rotating, single-use refresh tokens (SHA-256 hashed).
+Fields:
+- `id`: Int, PK
+- `user_id`: Int, FK to User (Cascade delete)
+- `token_hash`: String, unique
+- `expires_at`: DateTime
+- `revoked_at`: DateTime?
+- `created_at`: DateTime
 
 ### Category
 Purpose: Top-level catalog grouping.
 Fields:
 - `id`: Int, PK
-- `name`: String, unique
-- `image`: String
+- `name`: String (NOT unique)
+- `image`: String?
 - `display_order`: Int, default 0
 - `is_hidden`: Boolean, default false
 - `created_at`: DateTime
-- `updated_at`: DateTime
 Relationships: One-to-many to `SubCategory`.
+Note: Category has NO `updated_at` column.
 
 ### SubCategory
 Purpose: Second-level catalog grouping under a Category.
@@ -133,12 +160,13 @@ Purpose: Represents product brands.
 Fields:
 - `id`: Int, PK
 - `name`: String, unique
-- `logo`: String
-- `display_order`: Int, default 0
-- `is_hidden`: Boolean, default false
+- `logo`: String (NOT NULL — a brand always has a logo)
 - `created_at`: DateTime
 - `updated_at`: DateTime
+- `deleted_at`: DateTime?  (soft delete marker)
 Relationships: One-to-many to `Product`, `BrandSubCategory`.
+Note: Brand has NO `display_order` and NO `is_hidden`. Removal is soft via
+`deleted_at`, and listing is ordered by `created_at DESC`.
 
 ### BrandSubCategory
 Purpose: Many-to-many join table linking Brands and SubCategories.
@@ -286,6 +314,31 @@ Fields:
 - `product_name`: String
 - `product_unit`: String
 
+### Banner
+Purpose: Home-screen promotional banner holding an ordered list of images.
+Fields:
+- `id`: Int, PK
+- `title`: String?
+- `is_active`: Boolean, default true
+- `sort_order`: Int, default 0
+- `created_at`: DateTime
+- `updated_at`: DateTime
+Relationships: One-to-many to `BannerImage`.
+
+### BannerImage
+Purpose: One banner image plus its own tap action.
+Fields:
+- `id`: Int, PK
+- `banner_id`: Int, FK to Banner (Cascade delete)
+- `image_url`: String
+- `sort_order`: Int, default 0
+- `click_action_type`: BannerActionType, default NONE
+- `click_target_id`: Int?
+- `click_target_data`: Json?
+- `created_at`: DateTime
+Note: the action lives on the IMAGE, not the Banner, so one banner can point
+its images at different destinations.
+
 ---
 
 ## 6. Database Relationships
@@ -361,7 +414,18 @@ Order
 - `PROCESSING`: Being prepared.
 - `SHIPPED`: Out for delivery.
 - `DELIVERED`: Completed.
-- `CANCELLED`: Aborted.
+- `CANCELLED`: Aborted by an ADMIN.
+- `CLIENTCANCELLED`: Cancelled by the client (48h window, only while PENDING or
+  CONFIRMED).
+
+**BannerActionType**
+- `NONE`: decorative, no destination.
+- `CATEGORY`: `click_target_id` is a Category id.
+- `PRODUCT`: `click_target_id` is a Product id.
+- `BRAND`: `click_target_id` is a non-deleted Brand id.
+- `FILTER`: `click_target_data` is a product-filter object.
+- `PAGE`: UNREACHABLE — always rejected at write time with
+  400 "PAGE action is UNKNOWN / VERIFY IN SOURCE".
 
 **PaymentMethod**
 - `CASH`: Paid on delivery.
@@ -382,10 +446,23 @@ Order
 ---
 
 ## 9. Authentication
-- Flow: Email/Phone & Password based login. 
-- Tokens: JWT tokens signed indefinitely (`3650d` expiry). No refresh token mechanism.
-- Passwords: Hashed using `bcrypt`.
+- Flow: EMAIL & Password based login only. There is no phone login.
+- Tokens: a JWT **access token that expires in 15 minutes** plus an opaque
+  **refresh token valid for 30 days**. Refresh tokens are SHA-256 hashed in the
+  `RefreshToken` table, are SINGLE USE, and are ROTATED on every
+  `POST /auth/refresh` (replaying one returns 401 "Refresh token has already
+  been used").
+- Banned users: `status = BANNED` is rejected at login AND at refresh with
+  403 "Account is banned". Because access tokens live 15 minutes, a ban takes
+  effect within that window. There is deliberately no DB lookup in AuthGuard.
+- Passwords: Hashed using `bcrypt` (10 salt rounds).
 - Controllers have distinct login/signup for `CLIENT` vs Admin Dashboard.
+- `email` is REQUIRED on `POST /auth/signup` (DTO-level only; the column stays
+  `String?` in the database).
+- SECURITY HOLE: `POST /auth/adminDashboard/signup` is `@Public()` and
+  hard-codes `role: ADMIN`, so anyone who can reach the server can create a
+  privileged account. It also takes an inline type instead of a DTO, so none of
+  its fields are validated. This needs protecting.
 
 ---
 
@@ -426,17 +503,47 @@ Order
 
 ---
 
-## 15. Order Rules (UNKNOWN / PENDING)
-*Note: The `src/order` module is not yet implemented. The rules below describe intended schema behavior.*
-- Order totals (`subtotal`, `shipping_fee`, `total_amount`) and Item prices (`unit_price`) are snapshotted in `Order` and `OrderItem`.
-- Bank transfers (`CARD` payment) require a manual photo upload (`payment_proof_image`) which an admin must review.
-- Creating an order will likely consume the coupon by inserting into `CouponUsage`.
+## 15. Order Rules (IMPLEMENTED)
+*The `src/order` module is fully implemented. These are the actual rules.*
+- Order totals (`subtotal`, `discount_amount`, `shipping_fee`, `total_amount`)
+  and item prices (`unit_price`, `total_price`, `product_name`, `product_unit`)
+  are SNAPSHOTTED into `Order` / `OrderItem`, so later catalog edits never
+  change history. `total_amount = subtotal - discount_amount + shipping_fee`.
+- `POST /order` is **multipart/form-data**. Bank transfers (`CARD`) require an
+  uploaded `payment_proof` FILE; the client never sends a path. CASH orders must
+  NOT send a file.
+- Payment receipts are stored OUTSIDE the public uploads root, at
+  `private-uploads/payment-proofs/<uuid>.<ext>`, and that folder is NOT served
+  statically. They are readable only through `GET /order/:id/payment-proof`,
+  which checks role/ownership.
+- Checkout runs in ONE **serializable** transaction with row locks on the cart,
+  its items, the products and the shipping zone, retried up to 3 times on
+  serialization failure. On any failure the uploaded file is deleted.
+- Creating an order DOES consume the coupon: `usage_count` is incremented and a
+  `CouponUsage` row is inserted. Consumption is PERMANENT — cancelling does not
+  restore it.
+- On success the cart is emptied and its `coupon_id` cleared.
+- Client cancellation (`PATCH /order/:id/cancel`) requires BOTH: within 48 hours
+  of creation AND status is PENDING or CONFIRMED.
+- Admin review: `PATCH /order/:id` changes fulfilment status (NO transition
+  validation — any status to any status). `PATCH /order/:id/payment-status`
+  accepts only APPROVED or REJECTED and only for CARD orders that have a
+  receipt. REJECTED lets the client re-upload via
+  `PATCH /order/:id/payment-proof`, which resets payment_status to PENDING.
+- `delivered_at` exists in the schema but NO code path ever sets it.
 
 ---
 
 ## 16. Monetary Rules
 - **Internal Math**: All monetary logic (cart subtotals, coupon math) MUST use `Prisma.Decimal` (e.g., `.mul()`, `.add()`, `.sub()`). Do NOT use floating point math (`parseFloat`).
 - **API Response**: Round Decimal results to the nearest integer (`Math.round()`) and cast to `Number` right before returning the JSON response. Do not send stringified Decimals.
+- REALITY CHECK: this rule is only followed where a service explicitly shapes
+  its output. Endpoints that return RAW Prisma rows DO emit stringified
+  Decimals, e.g. `GET /product/admin` ("520.00"), `GET /coupon`,
+  `GET /shipping-zone` ("30"), and the embedded `product` inside `GET /cart`.
+  Keep the rule for NEW code, but do not assume existing responses obey it —
+  see flutter.doc/flutter.general.txt §9 and admin.doc/admin.general.txt §10
+  for the authoritative per-endpoint tables.
 - Currency is implicitly EGP.
 
 ---
@@ -477,7 +584,8 @@ Rounds values -> Returns JSON payload
 ## 20. AI Coding Rules
 1. **DO NOT invent fields, routes, or modules**.
 2. **DO NOT change the Prisma schema** unless explicitly instructed.
-3. **DO NOT touch Order creation logic** (it is pending a separate review).
+3. **Be careful with Order creation logic** — it is a serializable transaction
+   with explicit row locks and retry handling. Do not restructure it casually.
 4. Use `Prisma.Decimal` for all internal money logic.
 5. Apply the `Math.round()` policy to monetary values in API responses.
 6. When calculating `effective_price`, always prioritize `discount_price` over `price`.
@@ -495,8 +603,25 @@ Rounds values -> Returns JSON payload
 ---
 
 ## 22. Known TODOs / Future Work
-- **PENDING / VERIFY IN SOURCE**: The complete `Order` flow (creation, item snapshots, coupon consumption race-conditions).
 - **PENDING**: Payment gateway integration is not planned; it relies on manual cash or uploaded images.
+- **SECURITY**: `POST /auth/adminDashboard/signup` is `@Public()` and creates
+  ADMIN accounts with no auth and no validation. Must be protected.
+- **SECURITY**: CORS is `origin: true` (reflects any origin) with
+  `credentials: true`. Tighten to an allowlist before production.
+- **SECURITY**: `JWT_SECRET` falls back to the literal `'defaultSecret'` when
+  the env var is missing.
+- No email service exists (`src/utils/email/` is empty), so there is no
+  password reset / forgot-password flow for any role.
+- An ADMIN cannot change their own password: `PATCH /profile/password` is
+  `@Roles(CLIENT)`.
+- No endpoint can assign the `DELIVERY`, `ORDERS_STAFF`, `ACCOUNTS_STAFF` or
+  `SUPPORT` roles, even though the enum defines them.
+- Admins cannot moderate reviews — the whole `/review` module is
+  `@Roles(CLIENT)`.
+- Stale FCM tokens are never pruned from `UserDevice`.
+- Several `GET` endpoints are still unbounded (`GET /order`,
+  `GET /order/admin/cancelled`, `GET /coupon`, `GET /banner`, and the category /
+  sub-category / brand lists).
 
 ---
 
@@ -506,3 +631,7 @@ Rounds values -> Returns JSON payload
 - **Business Logic**: `src/**/*.service.ts`
 - **Auth/Roles**: `src/guards/*.ts`
 - **Uploads**: `src/utils/multer/*`
+- **API contracts**: `flutter.doc/` (mobile app, role CLIENT) and `admin.doc/`
+  (web dashboard, role ADMIN). One file per module, each rebuilt from the
+  source above. Start with `flutter.doc/flutter.README.txt` or
+  `admin.doc/admin.README.txt`.

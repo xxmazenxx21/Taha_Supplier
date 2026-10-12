@@ -1,0 +1,508 @@
+================================================================================
+ADMIN — PRODUCT MODULE (includes gallery images)
+================================================================================
+
+1. MODULE
+--------------------------------------------------------------------------------
+The catalog itself. A Product belongs to one SubCategory and one Brand, has one
+main `image` plus an ordered gallery of ProductImage rows, and carries the
+pricing fields. `discount_percentage` is COMPUTED server-side — never send it.
+Delete is SOFT (is_available = false). Backed by src/product/. Used by: the
+Products page (paginated list with search/filters, create, edit form, gallery
+management, soft delete).
+
+
+2. ENDPOINT SUMMARY
+--------------------------------------------------------------------------------
+METHOD | PATH                               | ROLE   | PURPOSE
+-------|------------------------------------|--------|------------------------
+GET    | /product/admin                     | ADMIN  | Paginated list + filters
+GET    | /product/admin/:id                 | ADMIN  | Edit form (images w/ ids)
+POST   | /product                           | ADMIN  | Create (multipart)
+PATCH  | /product/:id                       | ADMIN  | Update (multipart)
+DELETE | /product/:id                       | ADMIN  | SOFT delete
+POST   | /product/:id/images                | ADMIN  | Append gallery images
+DELETE | /product/:id/images/:imageId       | ADMIN  | Remove one gallery image
+
+GET /product, GET /product/:id and GET /product/search are @Roles(CLIENT) — an
+ADMIN token gets 403 on all three. Always use the /admin variants.
+'admin' and 'admin/:id' are declared before ':id' — correct.
+
+
+3. THE DISCOUNT RULE (read this before building the form)
+--------------------------------------------------------------------------------
+    discount_price MUST BE STRICTLY LESS THAN price.
+
+Enforced in three places:
+  1. DTO decorator @IsLessThan('price') on create, and on update when BOTH
+     values are present in the same request:
+         400 "discount_price cannot be greater than or equal to price"
+  2. DTO @Min(1) on discount_price: it can never be 0.
+  3. A MERGED CHECK in the service on PATCH. This is the important one: it
+     combines what you sent with what is already in the database, so
+         PATCH { discount_price: 600 }   on a product whose price is 520
+         PATCH { price: 400 }            on a product whose discount_price is 455
+     BOTH fail with 400 "discount_price cannot be greater than or equal to
+     price", even though each request alone looks valid.
+
+discount_percentage is ALWAYS computed and overwritten by the server:
+    Math.round(((price - discount_price) / price) * 100)
+It is not in the DTO — sending it returns 400 ["property discount_percentage
+should not exist"].
+
+>>> YOU CANNOT CLEAR A DISCOUNT. There is no accepted value for
+>>> discount_price that removes it (null is not in the DTO, and 0 fails @Min(1)).
+>>> On every PATCH the service recomputes discount_percentage from the merged
+>>> values, so an existing discount_price persists until replaced with another
+>>> value below price. Removing a discount requires a direct database change.
+
+
+4. ENDPOINTS
+--------------------------------------------------------------------------------
+
+================================================================================
+4.1  GET /product/admin
+================================================================================
+Role: ADMIN
+
+QUERY PARAMS — all optional
+page           | int     | min 1, default 1
+per_page       | int     | min 1, MAX 100, default 20
+search         | string  | case-insensitive, matches product name OR brand name
+subcategory_id | int     | min 1
+category_id    | int     | min 1 (filters via the sub-category's parent)
+brand_id       | int     | min 1
+is_available   | boolean | send "true" or "false"
+
+SUCCESS 200 — PAGINATED
+    {
+      "message": "Success",
+      "data": {
+        "items": [
+          {
+            "id": 7,
+            "subcategory_id": 1,
+            "brand_id": 2,
+            "name": "Lavazza Qualita Oro 1kg",
+            "description": "قهوة فاخرة بنكهة غنية ومذاق مميز.",
+            "image": "/uploads/products/9f1c2e44-....jpg",
+            "price": "520.00",
+            "discount_price": "455.00",
+            "discount_percentage": "13.00",
+            "rating": "4.60",
+            "review_count": 38,
+            "is_best_seller": false,
+            "is_new": true,
+            "unit": "كجم",
+            "is_available": true,
+            "display_order": 0,
+            "created_at": "2026-10-06T17:03:48.766Z",
+            "updated_at": "2026-10-06T17:03:48.766Z",
+            "images": [
+              {
+                "id": 11,
+                "product_id": 7,
+                "image_url": "/uploads/products/aa11....jpg",
+                "display_order": 0,
+                "created_at": "2026-10-06T17:03:48.800Z"
+              }
+            ],
+            "subCategory": { "id": 1, "name": "قهوة", "category_id": 1 },
+            "brand": {
+              "id": 2,
+              "name": "لافازا (Lavazza)",
+              "logo": "/uploads/brands/8c11abb7-....png"
+            }
+          }
+        ],
+        "page": 1,
+        "per_page": 20,
+        "next_page": 2,
+        "last_page": 3,
+        "total": 45
+      }
+    }
+
+>>> MONEY COMES BACK AS DECIMAL STRINGS HERE: price, discount_price,
+>>> discount_percentage and rating are strings like "520.00". The CLIENT
+>>> endpoints convert the same fields to JSON numbers. Parse before doing any
+>>> arithmetic or formatting in the dashboard.
+
+ORDERING: created_at DESC (newest first). Not configurable.
+NO VISIBILITY FILTER: unavailable products and products under hidden
+sub-categories / categories are all included — that is the point of this route.
+`images` is ordered by display_order ASC.
+count() and findMany() share the same where clause, so `total` is accurate.
+
+ERRORS
+  400 ["per_page must not be greater than 100"]
+  400 ["page must not be less than 1"]
+  400 ["is_available must be a boolean value"]
+  400 ["property foo should not exist"]   (unknown query param)
+  401 / 403
+
+================================================================================
+4.2  GET /product/admin/:id
+================================================================================
+Role: ADMIN. Pre-fills the edit form.
+
+PATH PARAMS
+id | int | REQUIRED | positive integer
+
+SUCCESS 200 — ALL columns + gallery images WITH their ids + relations
+    {
+      "message": "Success",
+      "data": {
+        "id": 7,
+        "subcategory_id": 1,
+        "brand_id": 2,
+        "name": "Lavazza Qualita Oro 1kg",
+        "description": "قهوة فاخرة بنكهة غنية ومذاق مميز.",
+        "image": "/uploads/products/9f1c2e44-....jpg",
+        "price": "520.00",
+        "discount_price": "455.00",
+        "discount_percentage": "13.00",
+        "rating": "4.60",
+        "review_count": 38,
+        "is_best_seller": false,
+        "is_new": true,
+        "unit": "كجم",
+        "is_available": true,
+        "display_order": 0,
+        "created_at": "2026-10-06T17:03:48.766Z",
+        "updated_at": "2026-10-06T17:03:48.766Z",
+        "images": [
+          {
+            "id": 11,
+            "product_id": 7,
+            "image_url": "/uploads/products/aa11....jpg",
+            "display_order": 0,
+            "created_at": "2026-10-06T17:03:48.800Z"
+          },
+          {
+            "id": 12,
+            "product_id": 7,
+            "image_url": "/uploads/products/bb22....jpg",
+            "display_order": 1,
+            "created_at": "2026-10-06T17:03:48.812Z"
+          }
+        ],
+        "subCategory": { "id": 1, "name": "قهوة", "category_id": 1 },
+        "brand": {
+          "id": 2,
+          "name": "لافازا (Lavazza)",
+          "logo": "/uploads/brands/8c11abb7-....png"
+        }
+      }
+    }
+
+Each gallery entry carries `id` and `image_url` precisely so the dashboard can
+call DELETE /product/:id/images/:imageId. The client endpoints only expose the
+URL strings, so you MUST use this route to build a gallery editor.
+subCategory includes `category_id` so you can pre-select the category dropdown.
+
+Money is again DECIMAL STRINGS here.
+
+ERRORS
+  400 "Invalid product id"
+  404 "Product not found"
+  401 / 403
+
+================================================================================
+4.3  POST /product
+================================================================================
+Role: ADMIN
+Content-Type: multipart/form-data
+
+FORM FIELDS
+subcategory_id | int     | REQUIRED | integer, min 1
+brand_id       | int     | REQUIRED | integer, min 1
+name           | string  | REQUIRED | min length 2
+description    | string  | REQUIRED | non-empty
+price          | number  | REQUIRED | min 0
+unit           | string  | REQUIRED | non-empty, free text, e.g. "كجم", "لتر"
+discount_price | number  | optional | min 1, MUST be < price (see §3)
+is_available   | boolean | optional | "true"/"false", default true
+is_best_seller | boolean | optional | "true"/"false", default false
+is_new         | boolean | optional | "true"/"false", default false
+display_order  | int     | optional | integer, min 0, default 0
+
+Do NOT send discount_percentage, rating or review_count — they are server-owned
+and will trigger 400.
+
+FILE FIELDS  (this endpoint uses FileFieldsInterceptor — two separate fields)
+image  | file   | REQUIRED | field name `image`, max count 1
+images | file[] | optional | field name `images`, MAX 10 — the gallery
+         both: image/jpeg, image/jpg, image/png, image/webp, max 10 MB each
+
+REQUEST EXAMPLE
+    POST /product
+    Content-Type: multipart/form-data
+      subcategory_id: 1
+      brand_id:       2
+      name:           Lavazza Qualita Oro 1kg
+      description:    قهوة فاخرة بنكهة غنية
+      price:          520
+      discount_price: 455
+      unit:           كجم
+      is_new:         true
+      display_order:  0
+      image:          <main.jpg binary>
+      images:         <g1.jpg binary>
+      images:         <g2.jpg binary>
+
+SUCCESS 201 — the product with its gallery
+    {
+      "message": "Success",
+      "data": {
+        "id": 7,
+        "subcategory_id": 1,
+        "brand_id": 2,
+        "name": "Lavazza Qualita Oro 1kg",
+        "description": "قهوة فاخرة بنكهة غنية",
+        "image": "/uploads/products/9f1c2e44-....jpg",
+        "price": "520.00",
+        "discount_price": "455.00",
+        "discount_percentage": "13.00",
+        "rating": "0.00",
+        "review_count": 0,
+        "is_best_seller": false,
+        "is_new": true,
+        "unit": "كجم",
+        "is_available": true,
+        "display_order": 0,
+        "created_at": "2026-10-06T17:03:48.766Z",
+        "updated_at": "2026-10-06T17:03:48.766Z",
+        "images": [
+          { "id": 11, "product_id": 7,
+            "image_url": "/uploads/products/g1-....jpg",
+            "display_order": 0, "created_at": "..." },
+          { "id": 12, "product_id": 7,
+            "image_url": "/uploads/products/g2-....jpg",
+            "display_order": 1, "created_at": "..." }
+        ]
+      }
+    }
+
+Gallery display_order is assigned from the upload order (0, 1, 2, ...).
+
+ERRORS
+  400 "Main product image is required"       (the `image` field was absent)
+  400 ["name must be longer than or equal to 2 characters"]
+  400 ["description should not be empty"]
+  400 ["price must not be less than 0"]
+  400 ["discount_price must not be less than 1"]
+  400 "discount_price cannot be greater than or equal to price"
+  400 ["unit should not be empty"]
+  400 ["Validation failed (numeric string is expected)"]  (text in a number
+                                                           field)
+  400 ["property discount_percentage should not exist"]
+  400 "Subcategory or brand does not exist"   (Prisma P2003 is caught and
+                                               mapped here, unlike in the
+                                               sub-category module)
+  400 file type / size errors
+  401 / 403
+
+BUSINESS RULES
+  - If the database write fails for ANY reason, every file already written to
+    disk (main image AND gallery) is deleted, so failed attempts leave no
+    orphans.
+  - rating starts at 0 and review_count at 0; both are owned by the review
+    module and cannot be set here.
+
+================================================================================
+4.4  PATCH /product/:id
+================================================================================
+Role: ADMIN
+Content-Type: multipart/form-data
+All fields optional (PartialType of the create DTO).
+
+PATH PARAMS
+id | int | REQUIRED | parsed with unary + (non-numeric -> NaN -> 404)
+
+FORM FIELDS — the same set as create, all optional. See §3 for the merged
+discount rule, which is the main trap on this endpoint.
+
+FILE FIELD
+image | file | optional | field name `image`, max count 1. Replaces the MAIN
+                          image; the old file is deleted from disk after the DB
+                          update succeeds.
+
+>>> THIS ENDPOINT USES FileInterceptor('image') ONLY — it accepts NO `images`
+>>> field. Sending `images` returns 400 "Unexpected field - images".
+>>> Use POST /product/:id/images to add gallery pictures.
+
+SUCCESS 200 — the product with its gallery (same shape as create)
+    { "message": "Success", "data": { ...product..., "images": [ ... ] } }
+
+ERRORS
+  400 "discount_price cannot be greater than or equal to price"
+      (including the merged DB-value cases in §3)
+  400 "Subcategory or brand does not exist"
+  400 "Unexpected field - images"
+  400 validation / file type / size errors
+  404 "Product not found"   (the newly uploaded image is deleted first)
+  401 / 403
+
+GOTCHA: there is no way to clear the main `image` (Product.image is
+non-nullable) — only to replace it.
+
+================================================================================
+4.5  DELETE /product/:id
+================================================================================
+Role: ADMIN. No body. SOFT DELETE.
+
+PATH PARAMS
+id | int | REQUIRED | parsed with unary +
+
+SUCCESS 200 — the row with is_available = false
+    {
+      "message": "Success",
+      "data": {
+        "id": 7,
+        "name": "Lavazza Qualita Oro 1kg",
+        "is_available": false,
+        "price": "520.00",
+        "...": "all other product columns, no relations"
+      }
+    }
+
+ERRORS
+  404 "Product not found"   (existence IS checked here, unlike category /
+                             sub-category delete)
+  401 / 403
+
+BUSINESS RULES
+  - Only sets is_available = false. Fully reversible with
+    PATCH /product/:id  is_available=true.
+  - No files are deleted; gallery rows survive.
+  - The product disappears from /home and from GET /product?available=1, and
+    POST /cart/items rejects it with 409 "Product is not available". It STILL
+    APPEARS in a default GET /product (which does not filter availability
+    unless available=1 is passed) — so the app must honour is_available.
+  - Existing cart items and order history are untouched.
+
+================================================================================
+4.6  POST /product/:id/images
+================================================================================
+Role: ADMIN
+Content-Type: multipart/form-data
+
+PATH PARAMS
+id | int | REQUIRED | parsed with unary +
+
+FILE FIELD
+images | file[] | REQUIRED | field name `images`, MAX 10 per request
+                             image/jpeg, image/jpg, image/png, image/webp
+                             max 10 MB each
+
+No text fields are accepted.
+
+SUCCESS 201 — THE WHOLE PRODUCT in the CLIENT findOne shape (money as NUMBERS)
+    {
+      "message": "Success",
+      "data": {
+        "id": 7,
+        "name": "Lavazza Qualita Oro 1kg",
+        "description": "...",
+        "image": "/uploads/products/9f1c2e44-....jpg",
+        "images": [
+          "/uploads/products/aa11....jpg",
+          "/uploads/products/newly-added-....jpg"
+        ],
+        "price": 520,
+        "discount_price": 455,
+        "discount_percentage": 13,
+        "unit": "كجم",
+        "is_available": true,
+        "rating": 4.6,
+        "review_count": 38,
+        "subcategory_id": 1,
+        "subcategory_name": "قهوة",
+        "brand": { "id": 2, "name": "لافازا (Lavazza)",
+                   "logo": "/uploads/brands/8c11abb7-....png" },
+        "is_best_seller": false,
+        "is_new": true,
+        "display_order": 0,
+        "created_at": "...",
+        "updated_at": "..."
+      }
+    }
+
+>>> SHAPE WARNING: this returns productService.findOne(), which is the CLIENT
+>>> shape — `images` is a FLAT ARRAY OF URL STRINGS with NO ids, and money is
+>>> JSON NUMBERS rather than Decimal strings. That is a different shape from
+>>> everything else on this page. Refetch GET /product/admin/:id afterwards to
+>>> get the gallery ids you need for deletion.
+
+ERRORS
+  400 "No images provided"   (the `images` field was absent or empty)
+  400 "Unexpected field - image"   (the field must be named `images`)
+  400 file type / size errors
+  404 "Product not found"   (the uploaded files are deleted first)
+  401 / 403
+
+BUSINESS RULES
+  - APPENDS. Existing gallery rows are kept.
+  - display_order continues from the current maximum (max + 1, +2, ...).
+  - The 10-file cap is PER REQUEST, not a total. Call it repeatedly to exceed 10
+    gallery images — there is no overall ceiling.
+  - If the insert fails, the uploaded files are deleted from disk.
+
+================================================================================
+4.7  DELETE /product/:id/images/:imageId
+================================================================================
+Role: ADMIN. No body. HARD DELETE (row AND file).
+
+PATH PARAMS
+id      | int | REQUIRED | the PRODUCT id (unary +)
+imageId | int | REQUIRED | the ProductImage id from GET /product/admin/:id
+
+SUCCESS 200
+    { "message": "Success", "data": { "success": true } }
+
+ERRORS
+  404 "Product image not found"
+      Returned when no ProductImage row matches BOTH imageId and product_id.
+      A mismatched pair (right image, wrong product) also gives this message —
+      the endpoint does not separately report a missing product.
+  401 / 403
+
+BUSINESS RULES
+  - Removes the ProductImage row AND unlinks the file from disk (errors
+    swallowed, so a missing file does not fail the request).
+  - The MAIN `image` cannot be deleted this way — it is a column on Product,
+    not a ProductImage row. Replace it via PATCH /product/:id instead.
+  - Remaining images keep their display_order values; gaps are not re-sequenced.
+
+
+5. CHANGELOG vs THE OLD doc/ FOLDER
+--------------------------------------------------------------------------------
+BREAKING
+- GET /product/admin is now a PAGINATED OBJECT
+  ({ items, page, per_page, next_page, last_page, total }) and defaults to
+  per_page = 20. doc/product.txt documented it as "all products unfiltered",
+  i.e. a plain array. A dashboard that expected every row in one response now
+  silently shows only the first 20.
+
+NEW
+- GET /product/admin/:id (edit form with gallery ids) did not exist. Before
+  this, the dashboard had no supported way to obtain ProductImage ids, which
+  made DELETE /product/:id/images/:imageId unusable.
+- GET /product/admin gained search, subcategory_id, category_id, brand_id and
+  is_available filters.
+
+CORRECTED
+- Admin product endpoints return money as DECIMAL STRINGS, not numbers. The old
+  docs showed numeric values (999.99) in admin examples, which matched the
+  client endpoints rather than the admin ones.
+- PATCH /product/:id accepts only the `image` file field; sending `images`
+  errors with "Unexpected field - images". doc/product.txt listed "`image`
+  (file, optional)" but did not state that the gallery field is rejected.
+- The merged discount check (comparing your payload against the stored row on
+  PATCH) is documented explicitly, as is the fact that a discount cannot be
+  cleared through the API.
+- The documented upload size was 5MB; the real limit is 10MB per file (the
+  thrown oversize message still says 5MB and is wrong).
+- POST /product/:id/images returns the CLIENT-shaped product (flat image URLs,
+  numeric money), which is inconsistent with the rest of the admin surface.

@@ -1,0 +1,260 @@
+================================================================================
+FLUTTER — PRODUCT MODULE
+THIS FILE DEFINES THE PRODUCT_CARD SHAPE REFERENCED BY OTHER FLUTTER DOCS.
+================================================================================
+
+1. MODULE
+--------------------------------------------------------------------------------
+The catalog itself: filtered/sorted/paginated product lists, quick search, and
+full product details. Backed by src/product/. Used by: the Category page
+(?category_id=), the Sub-category page (?subcategory_id=), the Brand page
+(?subcategory_id=&brand_id= — the last drill-down level), the search bar, and
+the Product details screen.
+
+
+2. ENDPOINT SUMMARY
+--------------------------------------------------------------------------------
+METHOD | PATH              | ROLE   | PURPOSE
+-------|-------------------|--------|-------------------------------------------
+GET    | /product          | CLIENT | Filtered + sorted + paginated list
+GET    | /product/search   | CLIENT | Quick search, max 20 rows, no pagination
+GET    | /product/:id      | CLIENT | Full details for one product
+
+All three are @Roles(CLIENT). An ADMIN token gets 403 — the dashboard uses
+/product/admin instead (see admin.doc/admin.product.txt).
+
+
+3. THE PRODUCT_CARD SHAPE
+--------------------------------------------------------------------------------
+GET /product (items[]), GET /product/search (array), and the four product
+sections of GET /home all return this EXACT shape. Call it PRODUCT_CARD.
+
+    {
+      "id": 7,
+      "name": "Lavazza Qualita Oro 1kg",
+      "image": "/uploads/products/9f1c2e44-....jpg",
+      "images": [
+        "/uploads/products/aa11....jpg",
+        "/uploads/products/bb22....jpg"
+      ],
+      "price": 520,
+      "discount_price": 455,
+      "discount_percentage": 12.5,
+      "unit": "كجم",
+      "is_available": true,
+      "rating": 4.6,
+      "review_count": 38,
+      "subcategory_id": 1,
+      "subcategory_name": "قهوة",
+      "brand": {
+        "id": 2,
+        "name": "لافازا (Lavazza)",
+        "logo": "/uploads/brands/8c11abb7-....png"
+      },
+      "is_best_seller": false,
+      "is_new": true
+    }
+
+FIELD NOTES
+  image               string, SERVER-RELATIVE path — prefix with the base URL.
+                      May already be a full http(s) URL in seeded data; guard.
+  images              array of strings (the gallery, ordered by display_order).
+                      Just the URLs — no ids here. May be [].
+  price               JSON NUMBER
+  discount_price      JSON NUMBER or null. When non-null this is the price to
+                      charge; show `price` struck through.
+  discount_percentage JSON NUMBER or null (e.g. 12.5)
+  rating              JSON NUMBER, 0..5
+  review_count        integer
+  subcategory_name    string (may be absent if the relation is missing)
+  brand               object { id, name, logo } — logo is also relative
+  unit                free-text string set by the admin, e.g. "كجم", "لتر",
+                      "pcs". Display as-is; do not try to parse it.
+
+ROUNDING DIFFERENCE (harmless but real): on GET /home, price and
+discount_price are rounded to whole numbers; on GET /product and
+/product/search they are not. discount_percentage is never rounded on either.
+
+DIFFERENCE ON GET /product/:id: the details response is PRODUCT_CARD PLUS
+description, display_order, created_at, updated_at. See 4.3.
+
+
+4. ENDPOINTS
+--------------------------------------------------------------------------------
+
+================================================================================
+4.1  GET /product
+================================================================================
+Role: CLIENT. No body.
+
+QUERY PARAMS — all optional
+category_id     | int    | min 1          | filter by PARENT CATEGORY
+subcategory_id  | int    | (no min)       | filter by sub-category
+brand_id        | int    | (no min)       | filter by brand
+search          | string |                | case-insensitive, matches product
+                                            name OR brand name
+available       | int    | must be 0 or 1 | 1 => only is_available = true.
+                                            0 or omitted => no availability
+                                            filter is added
+offers          | int    | must be 0 or 1 | 1 => only rows with a
+                                            discount_price
+min_rating      | number |                | rating >= this value
+sort            | string |                | one of: bestSelling, newest,
+                                            topRated, nameAsc
+page            | int    | min 1, def 1   |
+per_page        | int    | min 1, def 10  | NO maximum — see gotchas
+
+SORT BEHAVIOUR (exact, from product.service.ts)
+  bestSelling -> is_best_seller DESC, then review_count DESC
+  newest      -> is_new DESC, then id DESC
+  topRated    -> rating DESC
+  nameAsc     -> name ASC
+  anything else / omitted -> display_order ASC
+
+CATALOG DRILL-DOWN RECIPES
+  Category page:     GET /product?category_id=1&page=1&per_page=20
+  Sub-category page: GET /product?subcategory_id=1&page=1&per_page=20
+  Brand page (last): GET /product?subcategory_id=1&brand_id=2&page=1&per_page=20
+  Offers rail:       GET /product?offers=1&sort=topRated
+  category_id and subcategory_id may be combined; both filters apply.
+
+SUCCESS 200
+    {
+      "message": "Success",
+      "data": {
+        "items": [ <PRODUCT_CARD>, <PRODUCT_CARD> ],
+        "page": 1,
+        "per_page": 20,
+        "next_page": 2,
+        "last_page": 3,
+        "total": 45
+      }
+    }
+
+  next_page  integer, or null when you are on the last page
+  last_page  always >= 1 (it is 1 even when total = 0)
+  total      total rows matching the filter, ignoring pagination
+
+ERRORS
+  400 ["available must be one of the following values: 0, 1"]
+  400 ["page must not be less than 1"]
+  400 ["category_id must not be less than 1"]
+  400 ["property foo should not exist"]   — unknown query param
+  401 Unauthorized
+  403 role error
+
+VISIBILITY RULE (important)
+  Only products whose sub-category is visible AND whose parent category is
+  visible are returned:
+      subCategory.is_hidden = false AND subCategory.category.is_hidden = false
+  Note this is applied even when you do NOT pass category_id. Hiding a category
+  in the dashboard therefore hides all of its products from this endpoint.
+  is_available is NOT filtered unless you pass available=1, so unavailable
+  products CAN appear here — check is_available before enabling "Add to cart".
+
+================================================================================
+4.2  GET /product/search
+================================================================================
+Role: CLIENT
+
+QUERY PARAMS
+q | string | REQUIRED | minimum length 2
+
+    GET /product/search?q=lavazza
+
+SUCCESS 200 — a PLAIN ARRAY of PRODUCT_CARD, not a paginated object
+    {
+      "message": "Success",
+      "data": [ <PRODUCT_CARD>, <PRODUCT_CARD> ]
+    }
+
+ERRORS
+  400 "Search query must be at least 2 characters long"
+      (thrown when q is missing, empty, or 1 character)
+  401 Unauthorized
+  403 role error
+
+BUSINESS RULES / GOTCHAS
+  - Hard cap of 20 rows. There is NO pagination here and no total. For a
+    "see all results" screen use GET /product?search=<q> instead.
+  - Matches product name OR brand name, case-insensitive, substring.
+  - Visibility: filters on subCategory.is_hidden = false ONLY. Unlike
+    GET /product it does NOT check the parent category, and it does not check
+    is_available. Products of a hidden CATEGORY can therefore surface in search
+    while being absent from GET /product. Treat as a backend inconsistency.
+  - q is read with @Query('q') and is not DTO-validated, so extra query params
+    are ignored here rather than rejected.
+
+================================================================================
+4.3  GET /product/:id
+================================================================================
+Role: CLIENT
+
+PATH PARAMS
+id | int | REQUIRED | parsed with unary + (a non-numeric value becomes NaN and
+                      yields 404 "Product not found")
+
+SUCCESS 200 — PRODUCT_CARD plus description / display_order / timestamps
+    {
+      "message": "Success",
+      "data": {
+        "id": 7,
+        "name": "Lavazza Qualita Oro 1kg",
+        "description": "قهوة فاخرة بنكهة غنية ومذاق مميز.",
+        "image": "/uploads/products/9f1c2e44-....jpg",
+        "images": [
+          "/uploads/products/aa11....jpg"
+        ],
+        "price": 520,
+        "discount_price": 455,
+        "discount_percentage": 12.5,
+        "unit": "كجم",
+        "is_available": true,
+        "rating": 4.6,
+        "review_count": 38,
+        "subcategory_id": 1,
+        "subcategory_name": "قهوة",
+        "brand": {
+          "id": 2,
+          "name": "لافازا (Lavazza)",
+          "logo": "/uploads/brands/8c11abb7-....png"
+        },
+        "is_best_seller": false,
+        "is_new": true,
+        "display_order": 0,
+        "created_at": "2026-10-06T17:03:48.766Z",
+        "updated_at": "2026-10-06T17:03:48.766Z"
+      }
+    }
+
+ERRORS
+  404 "Product not found"
+  401 Unauthorized
+  403 role error
+
+BUSINESS RULES / GOTCHAS
+  - NO visibility filter at all. This endpoint fetches by primary key only, so
+    it returns products that are unavailable and products under a hidden
+    sub-category/category. The app must honour is_available itself before
+    allowing "Add to cart" (POST /cart/items would reject it with 409 anyway).
+  - brand here is { id, name, logo } — it does NOT include the brand's
+    sub-category links. Use GET /brand/:id for those.
+  - images is an array of plain URL strings. Gallery image IDs are only exposed
+    on the admin endpoints, so the app cannot delete individual images.
+
+
+5. CHANGELOG vs THE OLD doc/ FOLDER
+--------------------------------------------------------------------------------
+NEW
+- `category_id` is a new query param on GET /product. It is what makes the
+  Category page work without first resolving every sub-category id.
+
+CORRECTED
+- GET /product now also filters out products whose PARENT CATEGORY is hidden.
+  The old docs only mentioned the sub-category check.
+- doc/product.txt documented the ADMIN product endpoints under a "product"
+  heading. Those have moved to admin.doc/admin.product.txt and are no longer
+  mixed in with client endpoints. GET /product/admin is now PAGINATED, which is
+  a breaking change for the dashboard only.
+- GET /product/search is documented here as capped at 20 with no pagination;
+  older notes implied it behaved like the list endpoint.

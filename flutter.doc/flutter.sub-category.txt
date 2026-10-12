@@ -1,0 +1,164 @@
+================================================================================
+FLUTTER — SUB-CATEGORY MODULE
+================================================================================
+
+1. MODULE
+--------------------------------------------------------------------------------
+Second level of the catalog, between Category and Product. A SubCategory belongs
+to exactly one Category and is linked to many Brands through the
+BrandSubCategory join table. Backed by src/sub-category/. Used by: the
+Sub-category page, which shows the BRAND LOGOS linked to this sub-category plus
+its products. Tapping a brand logo opens the Brand page — the last drill-down
+level.
+
+
+2. ENDPOINT SUMMARY
+--------------------------------------------------------------------------------
+METHOD | PATH                 | ROLE          | PURPOSE
+-------|----------------------|---------------|-------------------------------
+GET    | /sub-category        | any logged-in | All visible sub-categories
+GET    | /sub-category/:id    | any logged-in | One visible sub-category + its
+       |                      |               | non-deleted linked brands
+
+Both carry no @Roles decorator, so any authenticated user (CLIENT included)
+passes. A token is still required.
+
+
+3. ENDPOINTS
+--------------------------------------------------------------------------------
+
+================================================================================
+3.1  GET /sub-category
+================================================================================
+Role: any authenticated user. No params, no body.
+
+SUCCESS 200 — a plain array, no pagination
+    {
+      "message": "Success",
+      "data": [
+        {
+          "id": 1,
+          "name": "قهوة",
+          "display_order": 0,
+          "image": "/uploads/sub-category/dd489d82-....jpeg",
+          "category_id": 1,
+          "is_hidden": false,
+          "created_at": "2026-10-06T17:03:46.820Z"
+        },
+        {
+          "id": 2,
+          "name": "دقيق",
+          "display_order": 1,
+          "image": "/uploads/sub-category/1b544714-....jpeg",
+          "category_id": 1,
+          "is_hidden": false,
+          "created_at": "2026-10-06T17:03:46.828Z"
+        }
+      ]
+    }
+
+ORDERING: display_order ASC (correctly applied here).
+FILTER: is_hidden = false.
+
+FIELD NOTES
+  image        string or null — relative, prefix with the base URL
+  category_id  integer, the parent Category
+  No parent category object and no brands are included. Use /sub-category/:id.
+  No updated_at column exists on SubCategory.
+
+GOTCHA: this endpoint does NOT check whether the PARENT CATEGORY is hidden. A
+sub-category of a hidden category still appears in this flat list, even though
+GET /category/:id would never show it and GET /product?category_id= excludes its
+products. Prefer reading the circles from GET /category/:id, and use this flat
+list only when you genuinely want every visible sub-category.
+
+ERRORS
+  401 Unauthorized
+
+================================================================================
+3.2  GET /sub-category/:id
+================================================================================
+Role: any authenticated user
+
+PATH PARAMS
+id | int | REQUIRED | parsed with unary + (non-numeric becomes NaN -> 404)
+
+SUCCESS 200 — the sub-category with its brand links nested
+    {
+      "message": "Success",
+      "data": {
+        "id": 1,
+        "name": "قهوة",
+        "display_order": 0,
+        "image": "/uploads/sub-category/dd489d82-....jpeg",
+        "category_id": 1,
+        "is_hidden": false,
+        "created_at": "2026-10-06T17:03:46.820Z",
+        "brandSubCategories": [
+          {
+            "id": 1,
+            "brand_id": 2,
+            "subcategory_id": 1,
+            "brand": {
+              "id": 2,
+              "name": "لافازا (Lavazza)",
+              "logo": "/uploads/brands/8c11abb7-....png"
+            }
+          },
+          {
+            "id": 2,
+            "brand_id": 3,
+            "subcategory_id": 1,
+            "brand": {
+              "id": 3,
+              "name": "نسكافيه (Nescafé)",
+              "logo": "/uploads/brands/916a56bd-....jpg"
+            }
+          }
+        ]
+      }
+    }
+
+IMPORTANT SHAPE NOTE
+  The brands arrive NESTED INSIDE brandSubCategories, one level deep — they are
+  NOT a flat `brands` array on this client endpoint. Flatten it yourself:
+
+      final brands = data["brandSubCategories"]
+          .map((link) => link["brand"])
+          .toList();
+
+  (The admin variant GET /sub-category/admin/:id does return a flat `brands`
+  array. The two shapes differ — do not copy admin examples into the app.)
+
+ERRORS
+  404 "Sub category not found"
+  401 Unauthorized
+
+BUSINESS RULES / GOTCHAS
+  - 404 is returned when the sub-category does not exist, OR it is hidden, OR
+    its PARENT CATEGORY is hidden. The lookup is
+    findFirst({ id, is_hidden: false, category: { is_hidden: false } }).
+  - Soft-deleted brands are excluded (the include filters brand.deleted_at =
+    null), so brandSubCategories can be shorter than the raw link count, or [].
+  - brand here is only { id, name, logo }. No sub-category list, no timestamps.
+  - brandSubCategories has no explicit orderBy, so the brand logo order is not
+    guaranteed. Sort client-side if the order matters.
+
+SUB-CATEGORY PAGE RECIPE
+    GET /sub-category/:id                 -> header + brand logos
+    GET /product?subcategory_id=:id       -> its products
+Then, when a brand logo is tapped (the LAST level):
+    GET /product?subcategory_id=:id&brand_id=<brandId>
+
+
+4. CHANGELOG vs THE OLD doc/ FOLDER
+--------------------------------------------------------------------------------
+CORRECTED
+- GET /sub-category/:id now returns 404 when the sub-category is hidden OR its
+  parent category is hidden. Previously it used findUnique and happily returned
+  hidden rows — a visibility leak. This is a behaviour change the app may
+  notice.
+- doc/subcategory.txt documented POST / PATCH / DELETE / GET admin under the
+  same heading. Those are ADMIN-only and now live in
+  admin.doc/admin.sub-category.txt. (They also used to be reachable by ANY
+  logged-in client because they had no @Roles decorator; that hole is closed.)

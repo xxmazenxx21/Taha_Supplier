@@ -1,0 +1,235 @@
+================================================================================
+FLUTTER — HOME MODULE
+================================================================================
+
+1. MODULE
+--------------------------------------------------------------------------------
+One single call that builds the entire Home screen: banner carousel, category
+row, offers rail, best-sellers rail, "suggested / new" rail, a personalised
+"buy again" rail, and the brands rail. Backed by src/app.controller.ts and
+src/app.service.ts (all seven queries run in parallel server-side). Used by: the
+Home screen only. This is the first authenticated call the app makes after
+login.
+
+
+2. ENDPOINT SUMMARY
+--------------------------------------------------------------------------------
+METHOD | PATH   | ROLE   | PURPOSE
+-------|--------|--------|------------------------------------------------------
+GET    | /home  | CLIENT | Everything the Home screen needs, in one response
+
+The route is literally /home (registered on the root controller, no prefix).
+
+
+3. ENDPOINTS
+--------------------------------------------------------------------------------
+
+================================================================================
+3.1  GET /home
+================================================================================
+Role: CLIENT (strictly — an ADMIN token gets 403)
+No path params, NO query params, no body. The user id is taken from the JWT and
+is used only to build `reordered`.
+
+SUCCESS 200
+    {
+      "message": "Success",
+      "data": {
+        "banners": [
+          {
+            "id": 1,
+            "title": "عروض اليوم",
+            "is_active": true,
+            "sort_order": 0,
+            "created_at": "2026-10-06T17:03:49.102Z",
+            "updated_at": "2026-10-06T17:03:49.102Z",
+            "images": [
+              {
+                "id": 1,
+                "banner_id": 1,
+                "image_url": "/uploads/banners/ca263286-....png",
+                "sort_order": 0,
+                "click_action_type": "CATEGORY",
+                "click_target_id": 1,
+                "click_target_data": null,
+                "created_at": "2026-10-06T17:03:49.102Z"
+              }
+            ]
+          }
+        ],
+        "offers":       [ <HOME_PRODUCT> ],
+        "best_sellers": [ <HOME_PRODUCT> ],
+        "suggested":    [ <HOME_PRODUCT> ],
+        "categories": [
+          {
+            "id": 1,
+            "name": "المواد الخام",
+            "display_order": 0,
+            "image": "/uploads/categories/f35c6fd7-....png",
+            "is_hidden": false,
+            "created_at": "2026-10-06T17:03:46.796Z"
+          }
+        ],
+        "reordered":    [ <HOME_PRODUCT> ],
+        "brands": [
+          {
+            "id": 3,
+            "name": "نسكافيه (Nescafé)",
+            "logo": "/uploads/brands/916a56bd-....jpg",
+            "created_at": "2026-10-06T17:03:46.849Z",
+            "updated_at": "2026-10-06T17:03:46.849Z"
+          }
+        ]
+      }
+    }
+
+All seven keys are ALWAYS present. Any of the arrays can be empty. Render each
+section only when its array is non-empty.
+
+HOME_PRODUCT is the PRODUCT_CARD shape defined in flutter.product.txt §3, with
+one difference: here `price` and `discount_price` are ROUNDED to whole numbers
+(`discount_percentage` and `rating` are not rounded).
+
+ERRORS
+  401 Unauthorized                 missing / expired access token -> refresh
+  403 "You do not have the required roles to access this resource"
+                                   token is valid but role is not CLIENT
+  500                              unexpected server/database failure
+
+
+4. WHAT EACH SECTION CONTAINS (exact rules from app.service.ts)
+--------------------------------------------------------------------------------
+banners
+    WHERE is_active = true
+    ORDER BY sort_order ASC, then created_at DESC
+    Each banner's images ORDER BY sort_order ASC.
+    No limit. Raw Banner rows (no field conversion).
+
+offers          up to 10
+    WHERE is_available = true AND subCategory.is_hidden = false
+          AND discount_price IS NOT NULL
+    ORDER BY display_order ASC, then created_at DESC
+
+best_sellers    up to 10
+    WHERE is_available = true AND subCategory.is_hidden = false
+          AND is_best_seller = true
+    ORDER BY review_count DESC, then display_order ASC
+
+suggested       up to 10
+    WHERE is_available = true AND subCategory.is_hidden = false
+          AND is_new = true
+    ORDER BY display_order ASC, then created_at DESC
+
+categories      no limit
+    WHERE is_hidden = false
+    ORDER BY display_order ASC
+    Same object shape as GET /category.
+
+reordered       up to 10  ("buy it again", personalised)
+    Distinct products from THIS user's past order items, where the order status
+    is NOT CANCELLED and NOT CLIENTCANCELLED, and the product is still
+    is_available = true with a visible sub-category.
+    ORDER BY order_item.id DESC (most recently ordered first), distinct on
+    product_id.
+    EMPTY for a brand-new user — that is expected, just hide the section.
+
+brands          no limit
+    WHERE deleted_at = null
+    ORDER BY created_at DESC
+    Only { id, name, logo, created_at, updated_at } — NO brandSubCategories
+    here (unlike GET /brand).
+
+NOTE: unlike GET /product, the three product rails do NOT check whether the
+parent CATEGORY is hidden — only the sub-category. A product under a visible
+sub-category whose category is hidden can appear on Home while being absent
+from GET /product?category_id=. Treat as a known backend inconsistency.
+
+There is no `secondary_banner` key. The Banner model has no such concept.
+
+
+5. BANNER TAP HANDLING — click_action_type
+--------------------------------------------------------------------------------
+The action lives on each BannerImage, not on the Banner, so one banner can have
+differently-targeted images. Enum values (BannerActionType):
+
+NONE
+    click_target_id = null, click_target_data = null.
+    Decorative. Do nothing on tap.
+
+CATEGORY
+    click_target_id = a Category id. click_target_data = null.
+    -> open the Category page for that id (GET /category/:id +
+       GET /product?category_id=:id)
+
+PRODUCT
+    click_target_id = a Product id. click_target_data = null.
+    -> open Product details (GET /product/:id)
+
+BRAND
+    click_target_id = a Brand id (guaranteed non-deleted at creation time).
+    click_target_data = null.
+    -> open the Brand page (GET /product?brand_id=:id)
+
+FILTER
+    click_target_id = null. click_target_data = a non-empty JSON OBJECT whose
+    keys are exactly the GET /product query params, validated server-side
+    against FindAllProductsDto. Possible keys:
+        category_id, subcategory_id, brand_id, search, available (0|1),
+        offers (0|1), min_rating, sort, page, per_page
+    -> open a product list screen, passing click_target_data straight through
+       as the query string of GET /product.
+    Example:
+        "click_target_data": { "subcategory_id": 2, "offers": 1,
+                               "sort": "topRated" }
+       -> GET /product?subcategory_id=2&offers=1&sort=topRated
+
+PAGE
+    DEAD VALUE — the backend REJECTS it at creation time with
+    400 "PAGE action is UNKNOWN / VERIFY IN SOURCE", so no stored BannerImage
+    can ever have it. Handle it in your switch as a no-op for safety, but it
+    will not occur in practice.
+
+Recommended Dart handling:
+
+    switch (image.clickActionType) {
+      case "CATEGORY": openCategory(image.clickTargetId!);       break;
+      case "PRODUCT":  openProduct(image.clickTargetId!);        break;
+      case "BRAND":    openBrand(image.clickTargetId!);          break;
+      case "FILTER":   openProductList(image.clickTargetData!);  break;
+      case "NONE":
+      default:         /* no-op */                               break;
+    }
+
+Always treat an unknown future value as NONE rather than crashing.
+
+
+6. BUSINESS RULES / GOTCHAS
+--------------------------------------------------------------------------------
+- The banner carousel should render the images of the FIRST active banner in the
+  returned order. `banners` is a list of banners, each with its own image list —
+  do not flatten them all into one carousel unless that is the intended design.
+- Every image path in this response (banner image_url, category image, brand
+  logo, product image/images) is SERVER-RELATIVE. Prefix with the base URL.
+- There is no caching header. Call GET /home on screen open / pull-to-refresh.
+- There are no query params. Do not try to paginate or filter this endpoint; any
+  extra query param is simply ignored (the handler takes no DTO).
+- `reordered` is the only personalised section. Everything else is identical for
+  all users, so it is safe to cache the rest across accounts if you want.
+
+
+7. CHANGELOG vs THE OLD doc/ FOLDER
+--------------------------------------------------------------------------------
+CONFIRMED STILL ACCURATE
+- doc/home.flutter.txt matched the current implementation closely, including the
+  seven section names, their ordering rules, and the absence of
+  `secondary_banner`. Those rules are preserved above.
+
+CORRECTED / CLARIFIED
+- The old doc said product money values are serialised "as JSON numbers" without
+  noting that on THIS endpoint price and discount_price are additionally rounded
+  to whole numbers, while GET /product does not round them.
+- `brands` on /home is a REDUCED shape ({id, name, logo, created_at,
+  updated_at}) and omits brandSubCategories, unlike GET /brand. The old doc did
+  not call this out.
+- PAGE is documented here as an unreachable enum value; the old doc listed it as
+  if it were usable.

@@ -1,0 +1,321 @@
+================================================================================
+ADMIN — GENERAL RULES
+Read this before any other file in admin.doc/.
+================================================================================
+
+1. MODULE
+--------------------------------------------------------------------------------
+Not a module — the cross-cutting rules for every request the dashboard makes:
+base URL, headers, response envelope, error shape, the admin login and token
+flow, multipart upload rules, image paths, and which numeric fields are JSON
+numbers vs Decimal strings. Used by every page.
+
+
+2. BASE URL
+--------------------------------------------------------------------------------
+No global route prefix. No "/api". Routes sit at the root:
+
+    http://localhost:3000/category/admin
+    http://localhost:3000/auth/adminDashboard/login
+
+The server listens on process.env.PORT, defaulting to 3000.
+
+CORS currently reflects ANY origin with credentials allowed
+(origin: true, credentials: true in src/main.ts), methods GET, HEAD, PUT, PATCH,
+POST, DELETE, OPTIONS. Tighten this to an allowlist before production.
+
+
+3. HEADERS
+--------------------------------------------------------------------------------
+    Authorization: Bearer <access_token>
+
+Content-Type:
+    application/json         JSON bodies (coupon, shipping-zone, order status,
+                             brand sub-category linking, broadcast, customer
+                             status)
+    multipart/form-data      anything with a file (category, sub-category,
+                             brand, product, banner)
+
+PUBLIC endpoints (no Authorization header) relevant to the dashboard:
+    POST /auth/adminDashboard/login
+    POST /auth/adminDashboard/signup    <-- see the warning in admin.auth.txt
+    POST /auth/refresh
+    POST /auth/logout
+
+Everything else needs a valid JWT whose role is ADMIN.
+
+
+4. SUCCESS RESPONSE ENVELOPE
+--------------------------------------------------------------------------------
+A global ResponseInterceptor wraps EVERY successful response:
+
+    { "message": "Success", "data": <payload> }
+
+Rules:
+  - A returned object containing "message" overrides the default string.
+  - A returned object containing "data" supplies the payload.
+  - If the returned object has exactly one key and it is "message", data = null.
+  - Otherwise the whole returned value becomes data.
+
+Always read the payload from response.data.
+
+ONE EXCEPTION — GET /order/:id/payment-proof streams raw image bytes and is NOT
+wrapped. See admin.order.txt.
+
+
+5. ERROR RESPONSES — NOT WRAPPED
+--------------------------------------------------------------------------------
+    { "message": "Category not found", "error": "Not Found", "statusCode": 404 }
+
+CRITICAL: "message" is a STRING or an ARRAY OF STRINGS. The global
+ValidationPipe returns an array:
+
+    {
+      "message": [
+        "name must be longer than or equal to 2 characters",
+        "discount_value must not be greater than 100"
+      ],
+      "error": "Bad Request",
+      "statusCode": 400
+    }
+
+Your error renderer must handle both — joining an array is usually what you want
+for a form-level banner, while field-level errors can be matched by prefix
+("name ", "price ", ...).
+
+Statuses used across the dashboard:
+  400  validation failure, or a documented business rule
+  401  missing / malformed / expired access token
+       { "message": "Unauthorized", "statusCode": 401 }
+  403  valid token, wrong role:
+         "You do not have permission (no role found)"
+         "You do not have the required roles to access this resource"
+       or a banned account: "Account is banned"
+  404  resource not found
+  409  conflict (duplicate name/code, order not reviewable, ...)
+  500  unexpected server error
+
+
+6. GLOBAL VALIDATION RULES
+--------------------------------------------------------------------------------
+ValidationPipe runs with { whitelist: true, forbidNonWhitelisted: true,
+transform: true }.
+
+  - ANY field not declared in the DTO causes 400. Never send extra keys, and do
+    not echo back a whole GET response into a PATCH — strip unknown fields first
+    (ids, timestamps, nested relations, computed fields).
+  - Numbers in query strings and multipart bodies are coerced where the DTO
+    declares @Type(() => Number).
+  - Booleans: in multipart / query strings, send the literal strings "true" or
+    "false" where the DTO has a @Transform — that is the case for
+    category.is_hidden, sub-category.is_hidden, product.is_available /
+    is_best_seller / is_new, banner.is_active, and the admin product filter
+    is_available.
+    EXCEPTION: ShippingZone `is_active` has NO transform, so it only accepts a
+    real JSON boolean. That endpoint is JSON, so send true / false unquoted.
+
+
+7. ADMIN LOGIN AND TOKEN FLOW
+--------------------------------------------------------------------------------
+Log in at POST /auth/adminDashboard/login (NOT /auth/login). It verifies the
+account exists AND role = ADMIN, with a constant-time password comparison.
+
+access_token   JWT, expires in 15 MINUTES. Payload { sub, email, role }.
+refresh_token  opaque string, valid 30 DAYS, SINGLE USE (rotated on refresh).
+
+Refresh with POST /auth/refresh (shared with the mobile app):
+  1. On any 401, POST /auth/refresh { refresh_token }.
+  2. Replace BOTH stored tokens with the pair that comes back.
+  3. Retry the original request once.
+  4. If refresh returns 401 or 403, clear tokens and return to the login page.
+  5. Serialise refreshes behind a single-flight lock. Two parallel refreshes
+     with the same token make one fail with
+     401 "Refresh token has already been used".
+
+Because an access token lives 15 minutes, a dashboard left open will 401
+constantly — implement the silent refresh, do not rely on long sessions.
+
+POST /auth/logout revokes ONE refresh token. There is no "log out everywhere"
+for admins (changing a password does that, but PATCH /profile/password is
+@Roles(CLIENT) and is NOT available to admins).
+
+
+8. MULTIPART UPLOAD RULES
+--------------------------------------------------------------------------------
+Shared limits (src/utils/multer/multer.ts):
+    allowed mime types : image/jpeg, image/jpg, image/png, image/webp
+    max size           : 10 MB per file  (MAX_FILE_SIZE = 10 * 1024 * 1024)
+
+FILE FIELD NAMES — these are exact and case-sensitive. Using the wrong name
+returns 400 "Unexpected field - <name>".
+
+    MODULE        | FIELD    | MAX COUNT | REQUIRED?
+    --------------|----------|-----------|--------------------------------------
+    category      | image    | 1         | optional (create and update)
+    sub-category  | image    | 1         | optional (create and update)
+    brand         | logo     | 1         | REQUIRED on create, optional on update
+    product       | image    | 1         | REQUIRED on create (main image),
+                  |          |           | optional on update
+    product       | images   | 10        | optional (gallery) — create only
+    product       | images   | 10        | REQUIRED on POST /product/:id/images
+    banner        | images   | 10        | at least 1 REQUIRED on create,
+                  |          |           | optional on update
+
+>>> TWO SIZE-LIMIT GOTCHAS
+>>> 1. BRAND LOGOS ARE CAPPED AT 5 MB, NOT 10 MB. POST /brand and
+>>>    PATCH /brand/:id add a second ParseFilePipe with
+>>>    MaxFileSizeValidator({ maxSize: 5 * 1024 * 1024 }). A 7 MB logo passes
+>>>    Multer and is then rejected by the pipe. Every other module allows 10 MB.
+>>> 2. The oversize ERROR MESSAGE IS WRONG. validateImageFiles throws
+>>>    `File "x.jpg" exceeds the 5MB size limit` even though the real limit is
+>>>    10 MB. Do not surface that string verbatim; show your own copy.
+
+Rejection happens twice: Multer's fileFilter + limits reject during the upload
+stream, and validateImageFiles re-checks afterwards. Error strings:
+    `File "x.gif" has an invalid type. Allowed: jpeg, jpg, png, webp`
+    `File "x.jpg" exceeds the 5MB size limit`     (see gotcha 2)
+
+Non-file fields travel as normal multipart text parts in the same request.
+
+
+9. HOW IMAGE PATHS WORK
+--------------------------------------------------------------------------------
+You upload a FILE; the backend stores it as
+<cwd>/uploads/<folder>/<uuid><ext> and saves a SERVER-RELATIVE path in the
+database:
+
+    /uploads/categories/f35c6fd7-....png
+    /uploads/sub-category/dd489d82-....jpeg
+    /uploads/brands/8c11abb7-....png
+    /uploads/products/9f1c2e44-....jpg
+    /uploads/banners/ca263286-....png
+
+Prefix with the base URL to display them:
+    <img src={`${baseUrl}${category.image}`} />
+
+Those paths ARE served statically (ServeStaticModule mapped to <cwd>/uploads at
+/uploads), no auth header needed.
+
+You never send an image PATH — only the file. The path is derived server-side.
+Product and banner rows created by data seeding may instead contain a full
+external http(s) URL, so guard before prefixing.
+
+REPLACEMENT behaviour: uploading a new image on PATCH deletes the old file from
+disk AFTER the database update succeeds. If the DB write fails, the newly
+uploaded file is deleted instead, so no orphans accumulate.
+
+PAYMENT RECEIPTS ARE DIFFERENT. order.payment_proof_image holds
+"private-uploads/payment-proofs/<uuid>.jpg" — no leading slash, and that folder
+is deliberately NOT served statically. Fetching it as a URL returns 404. Use
+GET /order/:id/payment-proof, which checks role/ownership and streams the bytes.
+
+
+10. NUMBERS: JSON NUMBER vs DECIMAL STRING
+--------------------------------------------------------------------------------
+Money and rating are Postgres DECIMAL. Admin endpoints that return RAW Prisma
+rows serialise them as STRINGS; endpoints that shape their output convert them
+to numbers. This differs per endpoint, so parse defensively.
+
+DECIMAL STRINGS (parse them)
+  GET /product/admin           items[].price, discount_price,
+                               discount_percentage, rating   e.g. "520.00"
+  GET /product/admin/:id       same fields
+  GET /coupon, /coupon/:id      discount_value, min_order_amount
+  POST/PATCH /coupon            same
+  GET /shipping-zone/admin      shipping_cost  e.g. "30"
+  GET /shipping-zone/admin/:id  shipping_cost
+  POST/PATCH /shipping-zone     shipping_cost
+  GET /customers/admin/:id      (orders[].total_amount is a NUMBER — see below)
+
+>>> NOTE the asymmetry: the CLIENT product endpoints (GET /product,
+>>> /product/:id) convert money to JSON numbers, but the ADMIN product
+>>> endpoints return Decimal strings. The dashboard must parse; the app does
+>>> not. Same data, different types.
+
+JSON NUMBERS
+  GET /order/admin             items[]: subtotal, discount_amount,
+                               shipping_fee, total_amount (all rounded to
+                               integers), items[].unit_price,
+                               items[].total_price,
+                               shippingZone.shipping_cost
+  GET /order/admin/:id         the same, PLUS coupon.discount_value
+  GET /order/admin/cancelled   the same
+  PATCH /order/:id             the same
+  PATCH /order/:id/payment-status  the same
+  GET /customers/admin/:id     latitude, longitude (or null),
+                               orders[].total_amount
+  Integers everywhere: all ids, quantity, review_count, display_order,
+  sort_order, usage_limit, usage_count, orders_count,
+  cancelled_orders_count.
+
+Order money is ROUNDED TO WHOLE NUMBERS by formatOrderResponse. Do not expect
+piastres/cents in order responses.
+
+Dates are ISO-8601 UTC strings: "2026-10-08T19:18:39.301Z".
+Currency is implicitly EGP; there is no currency field anywhere.
+
+
+11. PAGINATION CONTRACT
+--------------------------------------------------------------------------------
+The paginated admin endpoints all return the same envelope:
+
+    {
+      "items": [ ... ],
+      "page": 1,
+      "per_page": 20,
+      "next_page": 2,
+      "last_page": 3,
+      "total": 45
+    }
+
+  next_page  integer, or null on the last page
+  last_page  always >= 1 (it is 1 even when total = 0)
+  total      rows matching the filter, ignoring pagination
+
+Paginated:  GET /product/admin, GET /order/admin, GET /customers/admin
+            (page default 1, per_page default 20, MAX 100)
+NOT paginated (plain arrays): GET /category/admin, GET /sub-category/admin,
+            GET /brand/admin, GET /coupon, GET /shipping-zone/admin,
+            GET /banner, GET /order/admin/cancelled
+
+
+12. SOFT vs HARD DELETE — know which is which
+--------------------------------------------------------------------------------
+    DELETE /category/:id       SOFT  -> is_hidden = true
+    DELETE /sub-category/:id   SOFT  -> is_hidden = true
+    DELETE /product/:id        SOFT  -> is_available = false
+    DELETE /brand/:id          SOFT  -> deleted_at = now()
+    DELETE /product/:id/images/:imageId   HARD (row + file)
+    DELETE /brand/:id/subcategories/:sid  HARD (the link row only)
+    DELETE /coupon/:id         HARD  -> row permanently removed
+    DELETE /banner/:id         HARD  -> banner + images + files removed
+    shipping zones             NO delete endpoint; set is_active = false
+
+Soft-deleted rows stay visible on the admin list endpoints (that is the point
+of the /admin variants) and disappear from the client endpoints.
+
+
+13. CHANGELOG vs THE OLD doc/ FOLDER
+--------------------------------------------------------------------------------
+BREAKING
+- GET /product/admin and GET /order/admin are now PAGINATED objects
+  ({ items, page, per_page, next_page, last_page, total }). They used to return
+  plain arrays. per_page defaults to 20, so a dashboard that expected every row
+  in one call now silently shows only the first 20.
+- GET /category/admin and GET /brand/admin are NEW PATHS. Previously both
+  controllers declared a second @Get() on the bare path ('/category',
+  '/brand'), which Express never reached — the admin list was unreachable dead
+  code. Point the dashboard at /category/admin and /brand/admin.
+
+CORRECTED
+- Upload size: the real shared limit is 10 MB, not the 5 MB the old docs stated
+  — except brand logos, which really are 5 MB. The thrown oversize message
+  still says "5MB" and is simply wrong.
+- Token lifetimes: access 15 minutes, refresh 30 days with single-use rotation.
+  doc/AI_RULES.txt claimed tokens were signed for 3650d with no refresh
+  mechanism.
+- /uploads is now genuinely served by the backend; older notes implied the
+  returned paths were not reachable.
+- POST /sub-category, PATCH /sub-category/:id, DELETE /sub-category/:id and
+  GET /sub-category/admin previously had NO role guard, so any logged-in CLIENT
+  could call them. They are now @Roles(ADMIN).

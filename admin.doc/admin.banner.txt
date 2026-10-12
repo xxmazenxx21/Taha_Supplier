@@ -1,0 +1,355 @@
+================================================================================
+ADMIN — BANNER MODULE
+================================================================================
+
+1. MODULE
+--------------------------------------------------------------------------------
+Promotional banners for the mobile Home screen. A Banner holds an ordered list
+of BannerImage rows, and EACH IMAGE carries its own tap action
+(click_action_type + target), so one banner can point its images at different
+destinations. Delete is HARD (rows and files are removed). Backed by
+src/banner/. Used by: the Banners page.
+
+
+2. ENDPOINT SUMMARY
+--------------------------------------------------------------------------------
+METHOD | PATH          | ROLE          | PURPOSE
+-------|---------------|---------------|-----------------------------------------
+POST   | /banner       | ADMIN         | Create (multipart, >=1 image)
+GET    | /banner       | ADMIN, CLIENT | List ALL (active AND inactive)
+GET    | /banner/:id   | ADMIN, CLIENT | One banner
+PATCH  | /banner/:id   | ADMIN         | Update fields / replace images /
+       |               |               | reconfigure existing images
+DELETE | /banner/:id   | ADMIN         | HARD delete (rows + files)
+
+There is no /banner/admin route — GET /banner already returns everything
+including inactive banners, so it serves the dashboard directly.
+
+
+3. CLICK ACTIONS (BannerActionType)
+--------------------------------------------------------------------------------
+The action lives on the IMAGE, not the banner.
+
+NONE      no destination. click_target_id AND click_target_data must BOTH be
+          omitted/null. This is the default when you send no image_configs.
+CATEGORY  requires click_target_id = an existing Category id.
+          click_target_data must be absent.
+PRODUCT   requires click_target_id = an existing Product id.
+          click_target_data must be absent.
+BRAND     requires click_target_id = an existing NON-DELETED Brand id.
+          click_target_data must be absent.
+FILTER    requires a NON-EMPTY click_target_data OBJECT and NO click_target_id.
+          The object is validated against the product filter DTO. Allowed keys
+          ONLY:
+              subcategory_id, category_id, brand_id, search,
+              available (0|1), offers (0|1), min_rating, sort, page, per_page
+          Any other key is rejected. `sort` accepts bestSelling, newest,
+          topRated, nameAsc.
+PAGE      ALWAYS REJECTED with 400 "PAGE action is UNKNOWN / VERIFY IN SOURCE".
+          The enum value exists but no banner can ever be saved with it. Do not
+          offer it in the dashboard UI.
+
+Targets are validated AT WRITE TIME only. They are never re-validated on read,
+so a CATEGORY banner can end up pointing at a category that was later hidden.
+
+
+4. THE image_configs FIELD
+--------------------------------------------------------------------------------
+`image_configs` is a multipart TEXT field containing a JSON ARRAY STRING. It has
+two completely different meanings depending on whether you also upload files:
+
+A) WITH new files (create, or replace-all on update)
+   One config object PER UPLOADED FILE, in the SAME ORDER as the files.
+   The array length MUST equal the number of uploaded files, else
+   400 "image_configs must contain one configuration for each uploaded image".
+   Do NOT include image_id.
+
+        [
+          { "sort_order": 0, "click_action_type": "CATEGORY",
+            "click_target_id": 1 },
+          { "sort_order": 1, "click_action_type": "FILTER",
+            "click_target_data": { "subcategory_id": 2, "offers": 1 } },
+          { "sort_order": 2, "click_action_type": "NONE" }
+        ]
+
+   If you OMIT image_configs entirely, every uploaded image defaults to
+   click_action_type NONE with sort_order = its upload index.
+
+B) WITHOUT new files (update existing images in place — PATCH only)
+   EVERY config MUST carry `image_id` of an existing BannerImage of this banner.
+   You may change sort_order, click_action_type, click_target_id and
+   click_target_data. Files are untouched.
+
+        [
+          { "image_id": 10, "sort_order": 0,
+            "click_action_type": "PRODUCT", "click_target_id": 123 },
+          { "image_id": 11, "sort_order": 1, "click_action_type": "NONE" }
+        ]
+
+   You do not have to list every image — only the ones you want to change.
+   >>> GOTCHA: when you supply click_action_type for an existing image, any
+   >>> target you do NOT also supply is RESET TO NULL. Always send the full
+   >>> target alongside the action.
+
+PER-CONFIG FIELD RULES (BannerImageConfigDto)
+image_id          | int    | B only   | integer, min 1
+sort_order        | int    | optional | integer, min 0 (defaults to the index)
+click_action_type | enum   | optional | NONE | CATEGORY | PRODUCT | BRAND |
+                                        FILTER | PAGE (PAGE always 400)
+click_target_id   | int    | optional | integer, min 1
+click_target_data | object | optional | must be a JSON object. May also be sent
+                                        as a JSON STRING, which the server
+                                        parses.
+
+
+5. ENDPOINTS
+--------------------------------------------------------------------------------
+
+================================================================================
+5.1  POST /banner
+================================================================================
+Role: ADMIN
+Content-Type: multipart/form-data
+
+FORM FIELDS
+title         | string  | optional | any string. Stored as null when omitted.
+is_active     | boolean | optional | "true"/"false", default true
+sort_order    | int     | optional | integer, min 0, default 0
+image_configs | string  | optional | JSON array string, see §4A
+
+FILE FIELD
+images | file[] | REQUIRED | field name `images`, MAX 10
+                             image/jpeg, image/jpg, image/png, image/webp
+                             max 10 MB each
+                             AT LEAST ONE is required.
+
+REQUEST EXAMPLE
+    POST /banner
+    Content-Type: multipart/form-data
+      title:         عروض اليوم
+      is_active:     true
+      sort_order:    0
+      image_configs: [{"sort_order":0,"click_action_type":"CATEGORY","click_target_id":1}]
+      images:        <promo.png binary>
+
+SUCCESS 201
+    {
+      "message": "Success",
+      "data": {
+        "id": 1,
+        "title": "عروض اليوم",
+        "is_active": true,
+        "sort_order": 0,
+        "created_at": "2026-10-06T17:03:49.102Z",
+        "updated_at": "2026-10-06T17:03:49.102Z",
+        "images": [
+          {
+            "id": 1,
+            "banner_id": 1,
+            "image_url": "/uploads/banners/ca263286-....png",
+            "sort_order": 0,
+            "click_action_type": "CATEGORY",
+            "click_target_id": 1,
+            "click_target_data": null,
+            "created_at": "2026-10-06T17:03:49.102Z"
+          }
+        ]
+      }
+    }
+
+ERRORS
+  400 "At least one banner image is required"
+  400 "image_configs must be valid JSON"
+  400 "image_configs must be a JSON array"
+  400 "image_configs must contain one configuration for each uploaded image"
+  400 "Each image configuration must be an object"
+  400 "click_target_data must be valid JSON when sent as a string"
+  400 "Invalid banner image configuration"   (a per-config field failed
+                                              validation, e.g. sort_order < 0)
+  400 "NONE action cannot have click_target_id or click_target_data"
+  400 "CATEGORY action requires click_target_id and no click_target_data"
+      (same wording for PRODUCT and BRAND)
+  400 "FILTER action requires a non-empty click_target_data object and no
+       click_target_id"
+  400 "click_target_data contains unsupported product filters"
+  400 "PAGE action is UNKNOWN / VERIFY IN SOURCE"
+  400 "Unexpected field - image"   (the field must be named `images`)
+  400 file type / size errors
+  404 "Category not found" / "Product not found" / "Brand not found"
+      (the referenced click target does not exist, or the brand is soft-deleted)
+  401 / 403
+
+BUSINESS RULES
+  - If ANYTHING fails, every uploaded file is deleted from disk.
+  - `title` is nullable — a banner with no title is normal.
+
+================================================================================
+5.2  GET /banner
+================================================================================
+Role: ADMIN or CLIENT. No params, no body.
+
+SUCCESS 200 — plain array (NOT paginated), ACTIVE AND INACTIVE
+    {
+      "message": "Success",
+      "data": [
+        {
+          "id": 1,
+          "title": "عروض اليوم",
+          "is_active": true,
+          "sort_order": 0,
+          "created_at": "2026-10-06T17:03:49.102Z",
+          "updated_at": "2026-10-06T17:03:49.102Z",
+          "images": [
+            {
+              "id": 1,
+              "banner_id": 1,
+              "image_url": "/uploads/banners/ca263286-....png",
+              "sort_order": 0,
+              "click_action_type": "CATEGORY",
+              "click_target_id": 1,
+              "click_target_data": null,
+              "created_at": "2026-10-06T17:03:49.102Z"
+            }
+          ]
+        },
+        {
+          "id": 2,
+          "title": null,
+          "is_active": false,
+          "sort_order": 1,
+          "created_at": "2026-10-05T10:00:00.000Z",
+          "updated_at": "2026-10-05T10:00:00.000Z",
+          "images": []
+        }
+      ]
+    }
+
+ORDERING: sort_order ASC, then created_at DESC. Images: sort_order ASC.
+No is_active filter — correct for a dashboard. (GET /home does filter.)
+`images` can be [].
+
+ERRORS
+  401 / 403
+
+================================================================================
+5.3  GET /banner/:id
+================================================================================
+Role: ADMIN or CLIENT
+
+PATH PARAMS
+id | int | REQUIRED | ParseIntPipe — a non-numeric value returns 400, not 404
+                      (differs from most modules, which use unary +)
+
+SUCCESS 200 — one banner, same shape as an element of GET /banner.
+
+ERRORS
+  400 ["Validation failed (numeric string is expected)"]
+  404 "Banner not found"
+  401 / 403
+
+================================================================================
+5.4  PATCH /banner/:id
+================================================================================
+Role: ADMIN
+Content-Type: multipart/form-data
+
+PATH PARAMS
+id | int | REQUIRED | ParseIntPipe (non-numeric -> 400)
+
+THREE DISTINCT MODES, chosen by what you send:
+
+MODE 1 — fields only (no files, no image_configs)
+    Updates title / is_active / sort_order. EXISTING IMAGES ARE PRESERVED.
+      title:      Updated Summer Sale
+      is_active:  false
+      sort_order: 2
+
+MODE 2 — replace ALL images (upload one or more files)
+    >>> DESTRUCTIVE: every existing BannerImage row is DELETED and replaced by
+    >>> the uploaded files. The old files are removed from disk after the DB
+    >>> update succeeds. There is no way to append a single image to a banner.
+    image_configs follows rule §4A (one config per uploaded file, no image_id).
+      image_configs: [{"sort_order":0,"click_action_type":"PRODUCT","click_target_id":123}]
+      images:        <new.jpg binary>
+
+MODE 3 — reconfigure existing images (image_configs, NO files)
+    Every config MUST include image_id. Files are untouched. See §4B.
+      image_configs: [{"image_id":10,"sort_order":0,"click_action_type":"NONE"}]
+
+FORM FIELDS (all optional)
+title         | string  | any string
+is_active     | boolean | "true"/"false"
+sort_order    | int     | integer, min 0
+image_configs | string  | JSON array string (meaning depends on the mode)
+
+FILE FIELD
+images | file[] | optional | field name `images`, MAX 10, same type/size rules.
+                             Sending any file switches you into MODE 2.
+
+SUCCESS 200 — the updated banner with its images (same shape as create)
+
+ERRORS
+  400 all of the image_configs / action / target errors listed in §5.1
+  400 "image_configs must contain at least one existing image configuration"
+      (MODE 3 with an empty array)
+  400 "image_id is required when updating existing banner images"
+      (MODE 3 config without image_id)
+  400 "An image cannot be configured twice"   (duplicate image_id)
+  400 file type / size errors
+  404 "Banner not found"       (any uploaded files are deleted first)
+  404 "Banner image not found" (an image_id does not belong to this banner)
+  404 "Category not found" / "Product not found" / "Brand not found"
+  401 / 403
+
+BUSINESS RULES / GOTCHAS
+  - MODE 2 is all-or-nothing on images. To change one image of a three-image
+    banner you must re-upload all three.
+  - In MODE 3, supplying click_action_type without the matching target NULLS the
+    target. Send both together.
+  - MODE 3 runs inside a transaction, so a failure part-way leaves nothing
+    changed.
+
+================================================================================
+5.5  DELETE /banner/:id
+================================================================================
+Role: ADMIN. No body. HARD DELETE.
+
+PATH PARAMS
+id | int | REQUIRED | ParseIntPipe (non-numeric -> 400)
+
+SUCCESS 200
+    { "message": "Success", "data": { "success": true } }
+
+ERRORS
+  400 ["Validation failed (numeric string is expected)"]
+  404 "Banner not found"
+  401 / 403
+
+BUSINESS RULES
+  - >>> IRREVERSIBLE. The Banner row, all of its BannerImage rows (cascade) and
+    >>> all of the image FILES on disk are permanently removed. There is no
+    >>> soft delete and no restore. Confirm destructively in the UI.
+  - Missing files on disk are ignored, so the delete still succeeds.
+  - To take a banner off the Home screen WITHOUT losing it, set
+    is_active = false via PATCH instead.
+
+
+6. CHANGELOG vs THE OLD doc/ FOLDER
+--------------------------------------------------------------------------------
+CONFIRMED STILL ACCURATE
+- doc/admin.banner.txt matched the implementation closely: the three PATCH
+  modes, the image_configs contract, the supported FILTER keys, the per-action
+  target requirements, and the "PAGE action is UNKNOWN / VERIFY IN SOURCE"
+  rejection are all still correct and are preserved above.
+
+CORRECTED
+- The old doc said "Maximum file size is less than 5MB". The real limit is
+  10 MB per file (and the thrown oversize message still says 5MB, which is a
+  bug in the message, not the limit).
+- The old doc said "All endpoints require Authorization" and that GET accepts
+  "ADMIN or CLIENT tokens" — accurate, and restated here. POST/PATCH/DELETE are
+  ADMIN-only.
+- GET /banner/:id uses ParseIntPipe, so a non-numeric id gives 400 rather than
+  404. Not previously documented.
+- The MODE 3 behaviour where providing click_action_type resets an unsupplied
+  target to null was implied but not stated; it is now explicit.

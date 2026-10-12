@@ -1,0 +1,294 @@
+================================================================================
+ADMIN — CATEGORY MODULE
+================================================================================
+
+1. MODULE
+--------------------------------------------------------------------------------
+Top level of the catalog. A Category holds many SubCategories, which hold
+Products. Deleting is SOFT (is_hidden = true) because hiding a category also
+hides its products from the client catalog. Backed by src/category/. Used by:
+the Categories page (list, create, edit form, hide).
+
+
+2. ENDPOINT SUMMARY
+--------------------------------------------------------------------------------
+METHOD | PATH                  | ROLE          | PURPOSE
+-------|-----------------------|---------------|---------------------------------
+GET    | /category/admin       | ADMIN         | List ALL, hidden included
+GET    | /category/admin/:id   | ADMIN         | Edit form: one + all its subs
+POST   | /category             | ADMIN         | Create (multipart)
+PATCH  | /category/:id         | ADMIN         | Update (multipart)
+DELETE | /category/:id         | ADMIN         | HIDE (soft delete)
+GET    | /category             | any logged-in | Client list, visible only
+GET    | /category/:id         | any logged-in | Client detail, visible only
+
+Route order matters and is correct in the controller: 'admin' and 'admin/:id'
+are declared BEFORE ':id', so "admin" is never captured as an id.
+
+
+3. ENDPOINTS
+--------------------------------------------------------------------------------
+
+================================================================================
+3.1  GET /category/admin
+================================================================================
+Role: ADMIN. No params, no body.
+
+SUCCESS 200 — plain array (NOT paginated), hidden rows included
+    {
+      "message": "Success",
+      "data": [
+        {
+          "id": 1,
+          "name": "المواد الخام",
+          "display_order": 0,
+          "image": "/uploads/categories/f35c6fd7-....png",
+          "is_hidden": false,
+          "created_at": "2026-10-06T17:03:46.796Z",
+          "subcategories": [
+            {
+              "id": 1,
+              "name": "قهوة",
+              "display_order": 0,
+              "image": "/uploads/sub-category/dd489d82-....jpeg",
+              "category_id": 1,
+              "is_hidden": false,
+              "created_at": "2026-10-06T17:03:46.820Z"
+            }
+          ]
+        },
+        {
+          "id": 5,
+          "name": "موسم الشتاء",
+          "display_order": 9,
+          "image": null,
+          "is_hidden": true,
+          "created_at": "2026-10-02T11:00:00.000Z",
+          "subcategories": []
+        }
+      ]
+    }
+
+ORDERING: display_order ASC. No filter — hidden categories ARE returned, which
+is the whole point of this route.
+Each row nests ALL of its sub-categories, hidden ones included (no orderBy is
+applied to the nested array, so sort client-side if needed).
+`image` can be null. Category has no updated_at column.
+
+ERRORS
+  401 / 403
+
+================================================================================
+3.2  GET /category/admin/:id
+================================================================================
+Role: ADMIN. Use this to pre-fill the edit form.
+
+PATH PARAMS
+id | int | REQUIRED | must be a positive integer
+
+SUCCESS 200 — the category (hidden or not) with ALL its sub-categories
+    {
+      "message": "Success",
+      "data": {
+        "id": 1,
+        "name": "المواد الخام",
+        "display_order": 0,
+        "image": "/uploads/categories/f35c6fd7-....png",
+        "is_hidden": false,
+        "created_at": "2026-10-06T17:03:46.796Z",
+        "subcategories": [
+          {
+            "id": 1,
+            "name": "قهوة",
+            "display_order": 0,
+            "image": "/uploads/sub-category/dd489d82-....jpeg",
+            "category_id": 1,
+            "is_hidden": false,
+            "created_at": "2026-10-06T17:03:46.820Z"
+          },
+          {
+            "id": 9,
+            "name": "سكر (مخفي)",
+            "display_order": 5,
+            "image": null,
+            "category_id": 1,
+            "is_hidden": true,
+            "created_at": "2026-10-07T09:00:00.000Z"
+          }
+        ]
+      }
+    }
+
+Here the nested subcategories ARE ordered by display_order ASC.
+
+ERRORS
+  400 "Invalid category id"   (non-numeric, zero or negative)
+  404 "Category not found"
+  401 / 403
+
+Difference vs the client GET /category/:id: that one 404s on a hidden category
+and strips hidden sub-categories. This one returns everything.
+
+================================================================================
+3.3  POST /category
+================================================================================
+Role: ADMIN
+Content-Type: multipart/form-data
+
+FORM FIELDS
+name          | string  | REQUIRED | min length 2
+display_order | int     | optional | integer, min 0 (default 0 in the DB)
+is_hidden     | boolean | optional | send "true" or "false" (string accepted);
+                                     default false
+
+FILE FIELD
+image | file | optional | field name `image`, max count 1
+                          allowed: image/jpeg, image/jpg, image/png, image/webp
+                          max size 10 MB
+                          If omitted, the category is created with image = null.
+
+You must NOT send an `image` TEXT field — the DTO deliberately omits it, so the
+path is always derived from the uploaded file.
+
+REQUEST EXAMPLE
+    POST /category
+    Content-Type: multipart/form-data
+      name:          المواد الخام
+      display_order: 0
+      is_hidden:     false
+      image:         <category.png binary>
+
+SUCCESS 201
+    {
+      "message": "Success",
+      "data": {
+        "id": 1,
+        "name": "المواد الخام",
+        "display_order": 0,
+        "image": "/uploads/categories/f35c6fd7-....png",
+        "is_hidden": false,
+        "created_at": "2026-10-06T17:03:46.796Z"
+      }
+    }
+
+No `subcategories` key on the create response.
+
+ERRORS
+  400 ["name must be longer than or equal to 2 characters"]
+  400 ["display_order must not be less than 0"]
+  400 ["is_hidden must be a boolean value"]
+  400 ["property image should not exist"]   (you sent image as a text field)
+  400 "Unexpected field - picture"          (wrong file field name)
+  400 `File "x.gif" has an invalid type. Allowed: jpeg, jpg, png, webp`
+  400 `File "x.jpg" exceeds the 5MB size limit`   (message is wrong, the real
+                                                   limit is 10 MB)
+  401 / 403
+
+GOTCHA: `name` is NOT unique in the Prisma schema, so you can create two
+categories with the same name and get NO error. Enforce uniqueness in the
+dashboard UI if you want it.
+
+================================================================================
+3.4  PATCH /category/:id
+================================================================================
+Role: ADMIN
+Content-Type: multipart/form-data
+All fields optional — send only what changed.
+
+PATH PARAMS
+id | int | REQUIRED | parsed with unary + (non-numeric -> NaN -> 404)
+
+FORM FIELDS
+name          | string  | optional | min length 2
+display_order | int     | optional | integer, min 0
+is_hidden     | boolean | optional | "true" / "false"
+
+FILE FIELD
+image | file | optional | same rules as create. If provided it REPLACES the
+                          current image and the old file is deleted from disk
+                          after the DB update succeeds.
+
+SUCCESS 200
+    {
+      "message": "Success",
+      "data": {
+        "id": 1,
+        "name": "المواد الخام المحدثة",
+        "display_order": 2,
+        "image": "/uploads/categories/newfile-....png",
+        "is_hidden": false,
+        "created_at": "2026-10-06T17:03:46.796Z"
+      }
+    }
+
+ERRORS
+  400 validation arrays as in create
+  400 file type / size errors
+  404 "Category not found"   (the newly uploaded file is deleted first)
+  401 / 403
+
+BUSINESS RULES / GOTCHAS
+  - THERE IS NO WAY TO CLEAR AN IMAGE. Omitting `image` keeps the existing one;
+    there is no "remove image" flag. You can only replace it.
+  - Setting is_hidden = true here is equivalent to DELETE /category/:id.
+  - Hiding a category cascades in effect (not in data): GET /category/:id 404s
+    for clients, GET /product stops returning its products, and
+    GET /sub-category/:id 404s for its sub-categories. The sub-category rows
+    themselves are NOT modified — their own is_hidden stays as it was.
+
+================================================================================
+3.5  DELETE /category/:id
+================================================================================
+Role: ADMIN. No body. SOFT DELETE.
+
+PATH PARAMS
+id | int | REQUIRED | parsed with unary +
+
+SUCCESS 200 — the updated row, is_hidden now true
+    {
+      "message": "Success",
+      "data": {
+        "id": 1,
+        "name": "المواد الخام",
+        "display_order": 0,
+        "image": "/uploads/categories/f35c6fd7-....png",
+        "is_hidden": true,
+        "created_at": "2026-10-06T17:03:46.796Z"
+      }
+    }
+
+ERRORS
+  500  if the id does not exist. The service calls prisma.category.update
+       with NO prior existence check, so Prisma throws P2025 uncaught and it
+       surfaces as 500, NOT 404. Verify the id client-side (or call
+       GET /category/admin/:id first) before deleting.
+  401 / 403
+
+BUSINESS RULES
+  - The row is NEVER removed. This only sets is_hidden = true, so it is fully
+    reversible via PATCH with is_hidden = false.
+  - The image file on disk is NOT deleted.
+  - Sub-category and product rows are untouched.
+
+
+4. CHANGELOG vs THE OLD doc/ FOLDER
+--------------------------------------------------------------------------------
+BREAKING
+- The admin list moved from GET /category to GET /category/admin. The controller
+  used to declare TWO @Get() handlers on the bare path; Express only ever
+  reached the first (the client list), so the admin list was unreachable dead
+  code. doc/category.txt documented "GET /category -> list categories (admin
+  view)" — that never actually worked. Repoint the dashboard.
+
+NEW
+- GET /category/admin/:id (edit form, returns hidden categories and all
+  sub-categories) did not exist.
+
+CORRECTED
+- Category has NO `updated_at` column and `name` is NOT unique.
+  doc/AI_RULES.txt listed both incorrectly, and doc/category.txt showed
+  updated_at in every example response.
+- The documented upload limit was 5MB; the real limit is 10MB (the thrown
+  message still says 5MB and is wrong).
+- DELETE /category/:id on a missing id returns 500, not 404. Previously
+  undocumented.

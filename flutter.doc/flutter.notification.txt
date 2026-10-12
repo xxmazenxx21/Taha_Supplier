@@ -1,0 +1,220 @@
+================================================================================
+FLUTTER — NOTIFICATION MODULE (FCM push)
+================================================================================
+
+1. MODULE
+--------------------------------------------------------------------------------
+Firebase Cloud Messaging. The app's only job is to hand its FCM device token to
+the backend; the backend pushes to Firebase using firebase-admin. Device tokens
+live in the UserDevice table, one row per unique token. Backed by
+src/notification/ (sending) and src/auth/ (token registration). Used by: the
+Notifications side screen, plus the app-wide push handler and deep-link router.
+
+There is NO notification history table and NO GET /notification endpoint. If
+the app needs an inbox it must persist received pushes locally.
+
+
+2. ENDPOINT SUMMARY
+--------------------------------------------------------------------------------
+METHOD | PATH                   | ROLE   | PURPOSE
+-------|------------------------|--------|------------------------------------
+PATCH  | /auth/fcm-token        | CLIENT | Register / re-point a device token
+POST   | /auth/signup           | public | May carry fcm_token + platform
+POST   | /auth/login            | public | May carry fcm_token + platform
+
+POST /notification/broadcast is ADMIN-only (see
+admin.doc/admin.notification.txt). The app never calls it.
+
+
+3. REGISTERING THE DEVICE TOKEN
+--------------------------------------------------------------------------------
+Two equivalent ways:
+
+(a) INLINE at auth time — preferred, one round trip
+    POST /auth/login  (or /auth/signup) with:
+        { "email": "...", "password": "...",
+          "fcm_token": "fMEa9...", "platform": "android" }
+
+(b) SEPARATELY, any time after login — use this when the FCM token rotates
+    PATCH /auth/fcm-token
+    Content-Type: application/json
+    Role: CLIENT
+
+    BODY
+    fcm_token | string | REQUIRED | non-empty
+    platform  | string | optional | non-empty, e.g. "android" / "ios"
+
+    REQUEST
+        { "fcm_token": "fMEa9...new-token", "platform": "android" }
+
+    SUCCESS 200
+        { "message": "Success", "data": { "success": true } }
+
+    ERRORS
+        400 ["fcm_token should not be empty"]
+        400 ["property foo should not exist"]
+        401 Unauthorized
+        403 "You do not have the required roles to access this resource"
+
+REGISTRATION SEMANTICS (from AuthService.registerFcmToken)
+  - The row is UPSERTED on the TOKEN value, which is globally unique.
+  - If the token already exists but belongs to another user, it is MOVED to the
+    caller. This is what makes a reinstalled or shared device behave correctly.
+  - `platform` is only overwritten when you actually send it.
+  - One user may have MANY devices; every push goes to all of them.
+  - Tokens are NEVER removed automatically and there is no unregister endpoint.
+    Logging out does NOT drop the device token, so a logged-out device keeps
+    receiving that user's pushes until the token is re-registered to someone
+    else. If that matters, re-register on the next login and/or ignore pushes
+    while unauthenticated.
+
+RECOMMENDED CLIENT FLOW
+  1. Ask for notification permission (iOS, and Android 13+).
+  2. Get the FCM token from the Firebase SDK.
+  3. Send it in the login/signup body.
+  4. Listen for onTokenRefresh and call PATCH /auth/fcm-token with the new one.
+  5. Only start the push listener AFTER the user is authenticated.
+
+
+4. PUSH PAYLOADS THE APP CAN RECEIVE
+--------------------------------------------------------------------------------
+Every message is sent with sendEachForMulticast and contains BOTH a
+`notification` block (title/body, which the OS displays) and a `data` block.
+
+>>> ALL `data` VALUES ARE STRINGS. FCM data payloads are string-only, so
+>>> order_id arrives as "18", not 18. Parse with int.parse().
+
+There are exactly FOUR data.type values.
+
+--------------------------------------------------------------------------------
+4.1  ORDER_CREATED
+--------------------------------------------------------------------------------
+Sent to all of the buyer's devices right after POST /order commits.
+
+    notification.title : "Order created"
+    notification.body  : "Your order #18 was created successfully."
+
+    data = {
+      "type":     "ORDER_CREATED",
+      "order_id": "18",
+      "status":   "PENDING"      // always the literal PENDING
+    }
+
+  Deep link -> GET /order/18 (order details screen)
+
+--------------------------------------------------------------------------------
+4.2  ORDER_STATUS_UPDATED
+--------------------------------------------------------------------------------
+Sent to the order owner's devices when an ADMIN changes the fulfilment status
+(PATCH /order/:id).
+
+    notification.title : "Order status updated"
+    notification.body  : "Your order #18 is now SHIPPED."
+
+    data = {
+      "type":     "ORDER_STATUS_UPDATED",
+      "order_id": "18",
+      "status":   "SHIPPED"
+    }
+
+  `status` is one of: PENDING, CONFIRMED, PROCESSING, SHIPPED, DELIVERED,
+  CANCELLED, CLIENTCANCELLED.
+  Deep link -> GET /order/18
+
+--------------------------------------------------------------------------------
+4.3  PAYMENT_STATUS_UPDATED
+--------------------------------------------------------------------------------
+Sent to the order owner's devices when an ADMIN approves or rejects a CARD
+receipt (PATCH /order/:id/payment-status).
+
+    notification.title : "Payment status updated"
+    notification.body  : "The payment for your order #18 was rejected."
+                         (the status is lower-cased into the sentence)
+
+    data = {
+      "type":           "PAYMENT_STATUS_UPDATED",
+      "order_id":       "18",
+      "payment_status": "REJECTED"     // APPROVED or REJECTED
+    }
+
+  NOTE the key is `payment_status`, NOT `status`.
+  On REJECTED, route the user to the order and surface the "Re-upload receipt"
+  action (PATCH /order/:id/payment-proof). See flutter.order.txt §4.5.
+
+--------------------------------------------------------------------------------
+4.4  BROADCAST
+--------------------------------------------------------------------------------
+Sent by an admin to EVERY registered device (POST /notification/broadcast).
+
+    notification.title : <admin-supplied title>
+    notification.body  : <admin-supplied body, OPTIONAL — may be absent>
+
+    data = {
+      "type": "BROADCAST"
+    }
+
+  There is NO order_id and no other key. Nothing to deep-link to — just display
+  it. The body key is omitted entirely when the admin sent no body, so read it
+  defensively.
+
+--------------------------------------------------------------------------------
+SUGGESTED HANDLER
+--------------------------------------------------------------------------------
+    void handlePush(Map<String, dynamic> data) {
+      switch (data["type"]) {
+        case "ORDER_CREATED":
+        case "ORDER_STATUS_UPDATED":
+          openOrder(int.parse(data["order_id"] as String));
+          break;
+        case "PAYMENT_STATUS_UPDATED":
+          final id = int.parse(data["order_id"] as String);
+          if (data["payment_status"] == "REJECTED") {
+            openOrderWithReuploadPrompt(id);
+          } else {
+            openOrder(id);
+          }
+          break;
+        case "BROADCAST":
+        default:
+          // nothing to navigate to
+          break;
+      }
+    }
+
+Always have a `default` branch — new types may be added server-side.
+
+
+5. BUSINESS RULES / GOTCHAS
+--------------------------------------------------------------------------------
+- NOT GUARANTEED DELIVERY. If the backend has no Firebase credentials
+  configured it logs a warning ONCE and silently returns
+  { requested, sent: 0, failed: 0 } — no error, no push. In local development
+  you will usually receive nothing. Never make app state depend on a push
+  arriving; always refetch on screen open / pull-to-refresh.
+- Push failures never fail the triggering request. An order is created even if
+  the notification cannot be delivered.
+- Pushes are sent in batches of 500 tokens.
+- Dead/stale tokens are counted as failures and logged server-side, but they
+  are NOT deleted from UserDevice. The table accumulates stale tokens over time.
+- There is no per-user notification preference or mute flag anywhere in the
+  backend.
+- No notification is persisted server-side. data.type + order_id is all you get;
+  build any local inbox yourself.
+- The Firebase project used by the app must match the one whose service-account
+  credentials the backend holds, otherwise tokens are rejected by FCM.
+
+
+6. CHANGELOG vs THE OLD doc/ FOLDER
+--------------------------------------------------------------------------------
+NEW
+- PAYMENT_STATUS_UPDATED is a brand-new push type, added with the CARD
+  payment-review flow. It did not exist in doc/notification.flutter.txt. Note
+  its key is `payment_status`, not `status`.
+
+CONFIRMED STILL ACCURATE
+- The UserDevice upsert-by-token semantics (including moving a token between
+  users), the "no notification history / no GET /notification" statement, the
+  batching, and the graceful no-op when Firebase is unconfigured all still match
+  the code and are preserved above.
+- The app still never sends an fcm_token in POST /order; the device must be
+  registered beforehand through auth or PATCH /auth/fcm-token.

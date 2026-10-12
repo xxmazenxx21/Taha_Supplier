@@ -1,0 +1,182 @@
+================================================================================
+FLUTTER — BANNER MODULE
+================================================================================
+
+1. MODULE
+--------------------------------------------------------------------------------
+Promotional banners. Each Banner holds an ordered list of BannerImages, and each
+image carries its own tap action (click_action_type + target). Backed by
+src/banner/. Used by: nothing in the normal flow — the Home screen already
+receives its banners inside GET /home. These two read endpoints exist and ARE
+callable with a CLIENT token, so they are documented here, but prefer /home.
+
+
+2. ENDPOINT SUMMARY
+--------------------------------------------------------------------------------
+METHOD | PATH          | ROLE          | PURPOSE
+-------|---------------|---------------|-----------------------------------------
+GET    | /banner       | ADMIN, CLIENT | ALL banners, active AND inactive
+GET    | /banner/:id   | ADMIN, CLIENT | One banner by id
+
+Both handlers are @Roles(UserRole.ADMIN, UserRole.CLIENT), so a CLIENT token
+works. POST /banner, PATCH /banner/:id and DELETE /banner/:id are ADMIN-only
+(see admin.doc/admin.banner.txt).
+
+>>> PREFER GET /home. It already returns the banners, pre-filtered to
+>>> is_active = true, with images sorted. Use the endpoints below only if you
+>>> need a banner outside the Home screen (e.g. deep-linking to one by id).
+
+
+3. ENDPOINTS
+--------------------------------------------------------------------------------
+
+================================================================================
+3.1  GET /banner
+================================================================================
+Role: ADMIN or CLIENT. No params, no body.
+
+SUCCESS 200 — a plain array, no pagination
+    {
+      "message": "Success",
+      "data": [
+        {
+          "id": 1,
+          "title": "عروض اليوم",
+          "is_active": true,
+          "sort_order": 0,
+          "created_at": "2026-10-06T17:03:49.102Z",
+          "updated_at": "2026-10-06T17:03:49.102Z",
+          "images": [
+            {
+              "id": 1,
+              "banner_id": 1,
+              "image_url": "/uploads/banners/ca263286-....png",
+              "sort_order": 0,
+              "click_action_type": "CATEGORY",
+              "click_target_id": 1,
+              "click_target_data": null,
+              "created_at": "2026-10-06T17:03:49.102Z"
+            }
+          ]
+        },
+        {
+          "id": 2,
+          "title": null,
+          "is_active": false,
+          "sort_order": 1,
+          "created_at": "2026-10-05T10:00:00.000Z",
+          "updated_at": "2026-10-05T10:00:00.000Z",
+          "images": []
+        }
+      ]
+    }
+
+ORDERING: sort_order ASC, then created_at DESC.
+Each banner's images are ordered by sort_order ASC.
+
+>>> CRITICAL GOTCHA — THIS ENDPOINT RETURNS INACTIVE BANNERS TOO.
+>>> Unlike GET /home, there is NO is_active filter here. If you render this list
+>>> directly the user will see disabled banners. Filter client-side:
+>>>     final active = banners.where((b) => b["is_active"] == true).toList();
+
+FIELD NOTES
+  title              string or NULL (optional column)
+  is_active          boolean
+  sort_order         integer
+  images             array, can be EMPTY for a banner whose images were removed
+  images[].image_url SERVER-RELATIVE path — prefix with the base URL
+  click_target_id    integer or null
+  click_target_data  JSON object or null
+
+ERRORS
+  401 Unauthorized
+  403 role error (a token with neither ADMIN nor CLIENT, e.g. DELIVERY)
+
+================================================================================
+3.2  GET /banner/:id
+================================================================================
+Role: ADMIN or CLIENT
+
+PATH PARAMS
+id | int | REQUIRED | parsed with ParseIntPipe — a non-numeric value returns
+                      400, NOT 404 (this differs from most other modules, which
+                      use unary + and yield 404)
+
+SUCCESS 200 — one banner object, same shape as an element of GET /banner
+    {
+      "message": "Success",
+      "data": {
+        "id": 1,
+        "title": "عروض اليوم",
+        "is_active": true,
+        "sort_order": 0,
+        "created_at": "2026-10-06T17:03:49.102Z",
+        "updated_at": "2026-10-06T17:03:49.102Z",
+        "images": [
+          {
+            "id": 1,
+            "banner_id": 1,
+            "image_url": "/uploads/banners/ca263286-....png",
+            "sort_order": 0,
+            "click_action_type": "CATEGORY",
+            "click_target_id": 1,
+            "click_target_data": null,
+            "created_at": "2026-10-06T17:03:49.102Z"
+          }
+        ]
+      }
+    }
+
+ERRORS
+  400 ["Validation failed (numeric string is expected)"]  (non-numeric :id)
+  404 "Banner not found"
+  401 / 403
+
+GOTCHA: no is_active check here either. An inactive banner is returned normally.
+
+================================================================================
+4.  TAP HANDLING — click_action_type
+================================================================================
+Identical to the rules in flutter.home.txt §5. Summary:
+
+NONE      do nothing (target id and data are both null)
+CATEGORY  click_target_id is a Category id  -> open the Category page
+PRODUCT   click_target_id is a Product id   -> open Product details
+BRAND     click_target_id is a Brand id     -> open the Brand page
+FILTER    click_target_data is an object of GET /product query params
+          -> open a filtered product list, passing it straight through
+PAGE      unreachable. The backend rejects it at creation with
+          400 "PAGE action is UNKNOWN / VERIFY IN SOURCE", so no stored image
+          can have it. Treat as NONE if you ever see it.
+
+The action is per IMAGE, not per banner — one banner can point its images at
+different destinations. Always treat an unrecognised value as NONE.
+
+
+5. BUSINESS RULES / GOTCHAS
+--------------------------------------------------------------------------------
+- Use GET /home for the Home carousel. These endpoints exist mainly for the
+  dashboard; the client access is incidental.
+- Filter by is_active yourself if you use them (see §3.1).
+- Targets are validated at CREATION time (the backend checks the category /
+  product / brand exists). They are NOT re-validated on read, so a target can
+  go stale — e.g. a CATEGORY banner pointing at a category that was later
+  hidden, or a PRODUCT banner whose product became unavailable. Handle a 404
+  from the follow-up navigation call gracefully instead of assuming the target
+  resolves.
+- There is no pagination and no limit on GET /banner.
+
+
+6. CHANGELOG vs THE OLD doc/ FOLDER
+--------------------------------------------------------------------------------
+CONFIRMED STILL ACCURATE
+- doc/flutter.banner.txt already warned that GET /banner returns inactive
+  banners and that the app must filter with `banner.isActive`. That warning is
+  preserved above — it is still true.
+- The sort_order ASC / created_at DESC ordering is unchanged.
+
+CORRECTED
+- The old doc said "The backend currently protects these endpoints with the
+  CLIENT role." They are actually @Roles(ADMIN, CLIENT) — both roles pass.
+- GET /banner/:id uses ParseIntPipe, so a non-numeric id gives 400 rather than
+  404. Not previously documented.

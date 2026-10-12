@@ -1,0 +1,286 @@
+================================================================================
+ADMIN — SUB-CATEGORY MODULE
+================================================================================
+
+1. MODULE
+--------------------------------------------------------------------------------
+Second catalog level, between Category and Product. Belongs to exactly one
+Category and is linked to many Brands via the BrandSubCategory join table
+(managed from the BRAND side — see admin.brand.txt). Delete is SOFT
+(is_hidden = true). Backed by src/sub-category/. Used by: the Sub-categories
+page (list, create, edit form, hide).
+
+
+2. ENDPOINT SUMMARY
+--------------------------------------------------------------------------------
+METHOD | PATH                      | ROLE          | PURPOSE
+-------|---------------------------|---------------|-----------------------------
+GET    | /sub-category/admin       | ADMIN         | List ALL (hidden incl.) +
+       |                           |               | parent category, filterable
+GET    | /sub-category/admin/:id   | ADMIN         | Edit form: one + parent +
+       |                           |               | linked brands
+POST   | /sub-category             | ADMIN         | Create (multipart)
+PATCH  | /sub-category/:id         | ADMIN         | Update (multipart)
+DELETE | /sub-category/:id         | ADMIN         | HIDE (soft delete)
+GET    | /sub-category             | any logged-in | Client list, visible only
+GET    | /sub-category/:id         | any logged-in | Client detail, visible only
+
+'admin' and 'admin/:id' are declared before ':id' in the controller — correct.
+
+
+3. ENDPOINTS
+--------------------------------------------------------------------------------
+
+================================================================================
+3.1  GET /sub-category/admin
+================================================================================
+Role: ADMIN
+
+QUERY PARAMS
+category_id | int | optional | integer, min 1. Filters to one parent category.
+
+SUCCESS 200 — plain array (NOT paginated), hidden rows included
+    {
+      "message": "Success",
+      "data": [
+        {
+          "id": 1,
+          "name": "قهوة",
+          "display_order": 0,
+          "image": "/uploads/sub-category/dd489d82-....jpeg",
+          "category_id": 1,
+          "is_hidden": false,
+          "created_at": "2026-10-06T17:03:46.820Z",
+          "category": { "id": 1, "name": "المواد الخام", "is_hidden": false }
+        },
+        {
+          "id": 9,
+          "name": "سكر",
+          "display_order": 5,
+          "image": null,
+          "category_id": 1,
+          "is_hidden": true,
+          "created_at": "2026-10-07T09:00:00.000Z",
+          "category": { "id": 1, "name": "المواد الخام", "is_hidden": false }
+        }
+      ]
+    }
+
+ORDERING: display_order ASC. No visibility filter.
+`category` is always { id, name, is_hidden } — use its is_hidden to warn the
+admin that a visible sub-category is still invisible to clients because its
+PARENT is hidden.
+
+ERRORS
+  400 ["category_id must not be less than 1"]
+  400 ["property foo should not exist"]   (unknown query param)
+  401 / 403
+
+================================================================================
+3.2  GET /sub-category/admin/:id
+================================================================================
+Role: ADMIN. Pre-fills the edit form.
+
+PATH PARAMS
+id | int | REQUIRED | positive integer
+
+SUCCESS 200 — note `brands` is FLAT here
+    {
+      "message": "Success",
+      "data": {
+        "id": 1,
+        "name": "قهوة",
+        "display_order": 0,
+        "image": "/uploads/sub-category/dd489d82-....jpeg",
+        "category_id": 1,
+        "is_hidden": false,
+        "created_at": "2026-10-06T17:03:46.820Z",
+        "category": { "id": 1, "name": "المواد الخام", "is_hidden": false },
+        "brands": [
+          { "id": 2, "name": "لافازا (Lavazza)",
+            "logo": "/uploads/brands/8c11abb7-....png" },
+          { "id": 3, "name": "نسكافيه (Nescafé)",
+            "logo": "/uploads/brands/916a56bd-....jpg" }
+        ]
+      }
+    }
+
+SHAPE NOTE: the admin route flattens the join table into a plain `brands`
+array. The CLIENT route GET /sub-category/:id instead returns
+`brandSubCategories: [{ subCategory: {...}, brand: {...} }]`. Do not reuse one
+parser for both.
+
+Soft-deleted brands are excluded (brand.deleted_at = null). `brands` can be [].
+There is no orderBy on the links, so order is not guaranteed.
+
+ERRORS
+  400 "Invalid sub category id"
+  404 "Sub category not found"
+  401 / 403
+
+Returns hidden sub-categories and sub-categories under a hidden category —
+unlike the client route, which 404s on both.
+
+================================================================================
+3.3  POST /sub-category
+================================================================================
+Role: ADMIN
+Content-Type: multipart/form-data
+
+FORM FIELDS
+name          | string  | REQUIRED | min length 2, non-empty
+category_id   | int     | REQUIRED | integer, min 1 — the parent Category
+display_order | int     | optional | integer, min 0
+is_hidden     | boolean | optional | "true" / "false"
+
+FILE FIELD
+image | file | optional | field name `image`, max count 1,
+                          jpeg/jpg/png/webp, max 10 MB.
+                          Omitted -> image = null.
+
+REQUEST EXAMPLE
+    POST /sub-category
+    Content-Type: multipart/form-data
+      name:          قهوة
+      category_id:   1
+      display_order: 0
+      is_hidden:     false
+      image:         <coffee.jpeg binary>
+
+SUCCESS 201
+    {
+      "message": "Success",
+      "data": {
+        "id": 1,
+        "name": "قهوة",
+        "display_order": 0,
+        "image": "/uploads/sub-category/dd489d82-....jpeg",
+        "category_id": 1,
+        "is_hidden": false,
+        "created_at": "2026-10-06T17:03:46.820Z"
+      }
+    }
+
+No `category` and no `brands` on the create response.
+
+ERRORS
+  400 ["name must be longer than or equal to 2 characters"]
+  400 ["category_id must not be less than 1"]
+  400 ["is_hidden must be a boolean value"]
+  400 "Unexpected field - photo"   (wrong file field name)
+  400 file type / size errors
+  500  if category_id does not exist. The service does NOT pre-check the
+       parent, so Prisma raises an uncaught foreign-key error (P2003) and it
+       surfaces as 500, not 400/404. VALIDATE category_id IN THE DASHBOARD
+       (pick it from GET /category/admin) before submitting.
+  401 / 403
+
+GOTCHA: `name` is not unique. Duplicates are accepted silently.
+
+================================================================================
+3.4  PATCH /sub-category/:id
+================================================================================
+Role: ADMIN
+Content-Type: multipart/form-data
+All fields optional.
+
+PATH PARAMS
+id | int | REQUIRED | parsed with unary + (non-numeric -> NaN -> 404)
+
+FORM FIELDS
+name          | string  | optional | min length 2, non-empty
+category_id   | int     | optional | integer, min 1 — MOVES it to another parent
+display_order | int     | optional | integer, min 0
+is_hidden     | boolean | optional | "true" / "false"
+
+FILE FIELD
+image | file | optional | replaces the current image; the old file is deleted
+                          from disk after the DB update succeeds.
+
+SUCCESS 200
+    {
+      "message": "Success",
+      "data": {
+        "id": 1,
+        "name": "قهوة مختصة",
+        "display_order": 1,
+        "image": "/uploads/sub-category/newfile-....jpeg",
+        "category_id": 1,
+        "is_hidden": false,
+        "created_at": "2026-10-06T17:03:46.820Z",
+        "updated_at": "2026-10-08T10:12:00.000Z"
+      }
+    }
+
+  NOTE: SubCategory has no updated_at column in the schema, so the key above
+  will simply be absent. Do not depend on it.
+
+ERRORS
+  400 validation arrays, file type / size errors
+  404 "Sub category not found"   (the newly uploaded file is deleted first)
+  500  invalid category_id (uncaught P2003, as in create)
+  401 / 403
+
+BUSINESS RULES / GOTCHAS
+  - No way to clear an image — only replace it.
+  - Moving a sub-category to a different category via category_id also moves
+    all of its products in effect (products reference the sub-category, so
+    GET /product?category_id= follows the new parent).
+  - is_hidden = true here equals DELETE /sub-category/:id.
+
+================================================================================
+3.5  DELETE /sub-category/:id
+================================================================================
+Role: ADMIN. No body. SOFT DELETE.
+
+PATH PARAMS
+id | int | REQUIRED | parsed with unary +
+
+SUCCESS 200 — the updated row with is_hidden = true
+    {
+      "message": "Success",
+      "data": {
+        "id": 9,
+        "name": "سكر",
+        "display_order": 5,
+        "image": null,
+        "category_id": 1,
+        "is_hidden": true,
+        "created_at": "2026-10-07T09:00:00.000Z"
+      }
+    }
+
+ERRORS
+  500  if the id does not exist — prisma.subCategory.update is called with no
+       existence check, so P2025 escapes as 500 rather than 404.
+  401 / 403
+
+BUSINESS RULES
+  - Reversible: PATCH with is_hidden = false.
+  - Image file is NOT deleted from disk.
+  - Products under it are untouched but become invisible to clients
+    (GET /product filters on subCategory.is_hidden = false).
+  - Brand links (BrandSubCategory rows) are NOT removed.
+
+
+4. CHANGELOG vs THE OLD doc/ FOLDER
+--------------------------------------------------------------------------------
+SECURITY FIX (breaking for anyone relying on the hole)
+- POST /sub-category, PATCH /sub-category/:id, DELETE /sub-category/:id and
+  GET /sub-category/admin previously had NO @Roles decorator. Because RolesGuard
+  returns true when no roles metadata exists, ANY authenticated CLIENT could
+  create, edit or delete sub-categories. All four are now @Roles(ADMIN).
+  doc/subcategory.txt claimed they were "protected with the ADMIN role guard" —
+  they were not.
+
+NEW
+- GET /sub-category/admin/:id (edit form with parent + flat `brands`) did not
+  exist.
+- GET /sub-category/admin now accepts ?category_id= and includes the parent
+  `category` object on every row.
+
+CORRECTED
+- The client route GET /sub-category/:id now 404s when the sub-category OR its
+  parent category is hidden. It previously used findUnique and leaked hidden
+  rows.
+- SubCategory has no updated_at column; old examples showed one.

@@ -1,0 +1,270 @@
+================================================================================
+FLUTTER — REVIEW MODULE
+================================================================================
+
+1. MODULE
+--------------------------------------------------------------------------------
+Product ratings and comments. A user may leave AT MOST ONE review per product
+(unique on product_id + user_id). Every write recalculates the product's
+`rating` average and `review_count` inside a transaction. Backed by
+src/review/. Used by: the reviews section of the Product details screen.
+
+
+2. ENDPOINT SUMMARY
+--------------------------------------------------------------------------------
+METHOD | PATH                             | ROLE   | PURPOSE
+-------|----------------------------------|--------|---------------------------
+GET    | /review/:productId               | CLIENT | Paginated reviews + my own
+POST   | /review/:productId               | CLIENT | Create my review
+PATCH  | /review/:productId/:reviewId     | CLIENT | Edit my review
+DELETE | /review/:productId/:reviewId     | CLIENT | Delete my review
+
+The whole controller is @Roles(UserRole.CLIENT) — an ADMIN token gets 403 on all
+four. There is no admin moderation endpoint for reviews.
+
+
+3. THE REVIEW_ITEM SHAPE (read endpoint)
+--------------------------------------------------------------------------------
+    {
+      "id": 9,
+      "rating": 5,
+      "comment": "منتج ممتاز وتوصيل سريع",
+      "created_at": "2026-10-07T12:04:51.221Z",
+      "updated_at": "2026-10-07T12:04:51.221Z",
+      "user": {
+        "id": 12,
+        "name": "Ahmed Mahmoud",
+        "shop_name": "Ahmed Cafe"
+      }
+    }
+
+  rating     integer 1..5 (an Int column, always a plain JSON number)
+  comment    string or null
+  user       ONLY id / name / shop_name. shop_name may be null.
+             EMAIL AND PHONE ARE NEVER RETURNED — do not expect them.
+
+The WRITE endpoints return a different, smaller shape — see §4.2.
+
+
+4. ENDPOINTS
+--------------------------------------------------------------------------------
+
+================================================================================
+4.1  GET /review/:productId
+================================================================================
+Role: CLIENT
+
+PATH PARAMS
+productId | int | REQUIRED | positive integer
+
+QUERY PARAMS — both optional
+page     | int | min 1, default 1  |
+per_page | int | min 1, MAX 50, default 10 |
+
+SUCCESS 200
+    {
+      "message": "Success",
+      "data": {
+        "items": [ <REVIEW_ITEM>, <REVIEW_ITEM> ],
+        "page": 1,
+        "per_page": 10,
+        "next_page": 2,
+        "last_page": 3,
+        "total": 24,
+        "my_review": {
+          "id": 9,
+          "rating": 5,
+          "comment": "منتج ممتاز وتوصيل سريع",
+          "created_at": "2026-10-07T12:04:51.221Z",
+          "updated_at": "2026-10-07T12:04:51.221Z",
+          "user": {
+            "id": 12,
+            "name": "Ahmed Mahmoud",
+            "shop_name": "Ahmed Cafe"
+          }
+        }
+      }
+    }
+
+  items      newest first (created_at DESC)
+  next_page  integer or null on the last page
+  last_page  at least 1 (it is 1 even when total = 0)
+  my_review  THE CALLER'S OWN review in REVIEW_ITEM shape, or null if they have
+             not reviewed this product. It is fetched independently of
+             pagination, so it is present even when it is not on the current
+             page — and it ALSO appears inside `items` on whichever page it
+             falls. De-duplicate by id if you render my_review separately.
+
+Use my_review to decide the UI: null => show "Write a review"; non-null =>
+show it pinned at the top with Edit / Delete.
+
+ERRORS
+  400 "Invalid product id"
+  400 ["per_page must not be greater than 50"]
+  400 ["page must not be less than 1"]
+  404 "Product not found"   (checked first, before any review query)
+  401 / 403
+
+================================================================================
+4.2  POST /review/:productId
+================================================================================
+Role: CLIENT
+Content-Type: application/json
+
+PATH PARAMS
+productId | int | REQUIRED | positive integer
+
+BODY
+rating  | int    | REQUIRED | integer, min 1, max 5
+comment | string | optional | min length 1 (so "" is rejected — omit the key
+                              instead of sending an empty string)
+
+You must NOT send user_id or product_id. They were removed from the DTO;
+sending either returns 400 (forbidNonWhitelisted). The author is taken from the
+JWT and the product from the URL.
+
+REQUEST EXAMPLE
+    { "rating": 5, "comment": "منتج ممتاز وتوصيل سريع" }
+
+SUCCESS 201 — the raw review row with a MINIMAL user object
+    {
+      "message": "Success",
+      "data": {
+        "id": 9,
+        "product_id": 7,
+        "user_id": 12,
+        "rating": 5,
+        "comment": "منتج ممتاز وتوصيل سريع",
+        "created_at": "2026-10-07T12:04:51.221Z",
+        "updated_at": "2026-10-07T12:04:51.221Z",
+        "user": { "id": 12, "name": "Ahmed Mahmoud" }
+      }
+    }
+
+SHAPE DIFFERENCE vs REVIEW_ITEM (§3): the write response includes product_id and
+user_id, and its nested `user` has ONLY { id, name } — NO shop_name. The raw
+`product` object is deliberately not included. Simplest approach: after a
+successful write, refetch GET /review/:productId and GET /product/:id (to pick
+up the new rating / review_count).
+
+ERRORS
+  400 "Invalid product id"
+  400 ["rating must not be less than 1"] / ["rating must not be greater than 5"]
+  400 ["comment must be longer than or equal to 1 characters"]
+  400 ["property user_id should not exist"]
+  400 "A review for this product by this user already exists"
+      (the unique constraint fired — use PATCH to edit instead)
+  400 "Product or user does not exist"   (foreign-key failure)
+  401 / 403
+
+BUSINESS RULES
+  - ONE review per user per product. A second POST returns 400, not 409.
+  - On success, inside the same transaction, the product's `rating` is set to
+    the average of all its reviews and `review_count` to the total. Refetch the
+    product to show the new values.
+
+================================================================================
+4.3  PATCH /review/:productId/:reviewId
+================================================================================
+Role: CLIENT
+Content-Type: application/json
+
+PATH PARAMS
+productId | int | REQUIRED | positive integer — IS ENFORCED, see gotcha
+reviewId  | int | REQUIRED | positive integer
+
+BODY — all optional (PartialType of the create DTO)
+rating  | int    | optional | integer, min 1, max 5
+comment | string | optional | min length 1
+
+REQUEST EXAMPLE
+    { "rating": 4, "comment": "جيد لكن السعر مرتفع قليلا" }
+
+SUCCESS 200 — same shape as the POST response (§4.2)
+    {
+      "message": "Success",
+      "data": {
+        "id": 9,
+        "product_id": 7,
+        "user_id": 12,
+        "rating": 4,
+        "comment": "جيد لكن السعر مرتفع قليلا",
+        "created_at": "2026-10-07T12:04:51.221Z",
+        "updated_at": "2026-10-08T08:30:02.900Z",
+        "user": { "id": 12, "name": "Ahmed Mahmoud" }
+      }
+    }
+
+ERRORS
+  400 "Invalid product id" / "Invalid review id"
+  400 rating / comment validation arrays
+  404 "Review not found"   — the review does not exist, OR it does not belong
+                             to the productId in the URL
+  403 "You can only modify your own reviews"   (it exists on this product but
+                                                belongs to someone else)
+  401 / 403 role error
+
+BUSINESS RULES / GOTCHAS
+  - The productId in the URL IS verified against the review. Passing a
+    mismatched pair returns 404 "Review not found".
+  - Sending an empty body {} is valid and is a no-op update (it still
+    recalculates the product aggregate and bumps updated_at).
+  - Ownership mismatch is 403, while a product mismatch is 404. Two different
+    failures, two different statuses.
+  - The product's rating / review_count are recalculated in the same
+    transaction.
+
+================================================================================
+4.4  DELETE /review/:productId/:reviewId
+================================================================================
+Role: CLIENT. No body.
+
+PATH PARAMS
+productId | int | REQUIRED | positive integer — enforced, as in PATCH
+reviewId  | int | REQUIRED | positive integer
+
+SUCCESS 200 — returns the DELETED row (same shape as the POST response)
+    {
+      "message": "Success",
+      "data": {
+        "id": 9,
+        "product_id": 7,
+        "user_id": 12,
+        "rating": 4,
+        "comment": "جيد لكن السعر مرتفع قليلا",
+        "created_at": "2026-10-07T12:04:51.221Z",
+        "updated_at": "2026-10-08T08:30:02.900Z",
+        "user": { "id": 12, "name": "Ahmed Mahmoud" }
+      }
+    }
+
+ERRORS
+  400 "Invalid product id" / "Invalid review id"
+  404 "Review not found"   (missing, or not on this productId)
+  403 "You can only delete your own reviews"
+  401 / 403 role error
+
+BUSINESS RULES
+  - Hard delete. The row is gone.
+  - The product's rating and review_count are recalculated afterwards; if that
+    was the last review, rating drops to 0 and review_count to 0.
+  - After deleting, my_review on GET /review/:productId becomes null and the
+    "Write a review" entry point should reappear.
+
+
+5. CHANGELOG vs THE OLD doc/ FOLDER
+--------------------------------------------------------------------------------
+NEW
+- GET /review/:productId did not exist. There was previously NO way for the app
+  to list a product's reviews or to discover the user's own review.
+
+BREAKING
+- POST/PATCH no longer accept `user_id` or `product_id` in the body. They were
+  required/optional DTO fields before (doc/reviewprduct.txt showed user_id being
+  sent). Sending them now returns 400.
+- PATCH and DELETE now verify that the review belongs to the `productId` in the
+  URL. Previously the URL productId was ignored entirely, so any of your reviews
+  could be edited through any product's path.
+- Write responses no longer embed the full `product` object, and the create
+  response no longer leaks the author's email and phone (it used to select
+  email and phone).

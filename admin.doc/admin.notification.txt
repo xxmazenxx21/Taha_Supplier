@@ -1,0 +1,151 @@
+================================================================================
+ADMIN — NOTIFICATION MODULE (broadcast push)
+================================================================================
+
+1. MODULE
+--------------------------------------------------------------------------------
+Sends a one-off Firebase Cloud Messaging push to EVERY registered device. This
+is the only notification the admin triggers directly — the order-created,
+order-status and payment-status pushes are side effects of the order endpoints.
+Backed by src/notification/. Used by: the Notifications / announcements page.
+
+Nothing is persisted. There is no notification table, no history endpoint and no
+way to see or recall a past broadcast.
+
+
+2. ENDPOINT SUMMARY
+--------------------------------------------------------------------------------
+METHOD | PATH                     | ROLE  | PURPOSE
+-------|--------------------------|-------|-----------------------------------
+POST   | /notification/broadcast  | ADMIN | Push a message to ALL devices
+
+That is the entire module — one route. There is no GET, no list, no delete, and
+no way to target a single customer or a segment.
+
+
+3. ENDPOINTS
+--------------------------------------------------------------------------------
+
+================================================================================
+3.1  POST /notification/broadcast
+================================================================================
+Role: ADMIN
+Content-Type: application/json
+
+BODY
+title | string | REQUIRED | non-empty (@IsString + @IsNotEmpty). No max length
+                            is enforced by the DTO.
+body  | string | optional | non-empty IF SENT (@IsOptional + @IsNotEmpty), so
+                            an empty string "" is REJECTED — omit the key
+                            instead.
+
+REQUEST EXAMPLE
+    {
+      "title": "عروض الجمعة",
+      "body": "خصم 20% على كل أنواع القهوة حتى نهاية الأسبوع"
+    }
+
+REQUEST EXAMPLE — title only (valid)
+    { "title": "تم تحديث التطبيق" }
+
+SUCCESS 201 — a DELIVERY REPORT, not the message
+    {
+      "message": "Success",
+      "data": {
+        "requested": 42,
+        "sent": 39,
+        "failed": 3
+      }
+    }
+
+FIELD NOTES
+  requested  number of UNIQUE device tokens targeted (duplicates and empty
+             tokens are stripped before sending)
+  sent       how many Firebase accepted
+  failed     how many Firebase rejected, usually stale/uninstalled tokens
+
+>>> READ THE REPORT. requested: 0 means NO DEVICES ARE REGISTERED — the push
+>>> went nowhere and that is still a 201. sent: 0 with requested > 0 almost
+>>> always means Firebase is not configured on the server (see §4). Surface
+>>> these numbers in the UI instead of showing a bare "Sent!".
+
+ERRORS
+  400 ["title should not be empty"]
+  400 ["body should not be empty"]        (you sent body: "")
+  400 ["property image should not exist"] (no other fields are accepted)
+  401 Unauthorized
+  403 "You do not have the required roles to access this resource"
+
+NEVER RETURNS AN ERROR FOR A FAILED PUSH. If Firebase is unreachable, has bad
+credentials, or every token is dead, the call still succeeds with
+sent: 0 / failed: N. Delivery problems only ever appear in the report body and
+in the server log.
+
+
+4. WHAT THE CLIENT RECEIVES
+--------------------------------------------------------------------------------
+    notification.title : <your title>
+    notification.body  : <your body>   (the key is OMITTED when you sent none)
+
+    data = { "type": "BROADCAST" }
+
+There is NO order_id and no other data key, so the app has nothing to deep-link
+to — it just displays the message. The full client contract is in
+flutter.doc/flutter.notification.txt §4.4.
+
+Pushes are sent with sendEachForMulticast in BATCHES OF 500 TOKENS. Batches run
+in parallel and partial failures are tolerated; the counts in the response are
+the sum across all batches.
+
+
+5. BUSINESS RULES / GOTCHAS
+--------------------------------------------------------------------------------
+- >>> TRULY EVERY DEVICE. The service queries UserDevice with NO filter
+  >>> whatsoever: no role filter, no status filter. That means banned customers
+  >>> receive broadcasts, and any device token belonging to an ADMIN account
+  >>> that ever logged in through the mobile app receives them too. There is no
+  >>> way to exclude anyone.
+- NOT TARGETABLE. No per-user, per-city, per-role or per-segment broadcast
+  exists. If you need that, it has to be built.
+- NOT UNDOABLE. Once accepted by Firebase the message is gone. There is no
+  recall, no scheduling and no draft state.
+- NO RATE LIMITING. Nothing stops an admin from firing the same broadcast
+  repeatedly. Add a confirmation dialog in the dashboard.
+- NO DEDUPLICATION ACROSS CALLS. Two calls send two notifications.
+- STALE TOKENS ACCUMULATE. Failed tokens are counted and logged but are NEVER
+  deleted from UserDevice, so `failed` tends to grow over time as users
+  uninstall. A steadily rising failed count is normal, not a bug you can fix
+  from the dashboard.
+- FIREBASE MAY BE DISABLED. The backend needs either
+  FIREBASE_SERVICE_ACCOUNT_JSON, or all three of FIREBASE_PROJECT_ID,
+  FIREBASE_CLIENT_EMAIL and FIREBASE_PRIVATE_KEY. When they are missing the
+  service logs a warning ONCE and returns
+  { requested: N, sent: 0, failed: 0 } — a silent no-op with a 201. In local
+  development this is the normal result.
+- MULTI-DEVICE USERS get one push per registered device, so `requested` is
+  device count, not user count. There is no endpoint that reports how many
+  devices or users are registered, so this response is the only visibility you
+  have.
+
+
+6. CHANGELOG vs THE OLD doc/ FOLDER
+--------------------------------------------------------------------------------
+CONFIRMED STILL ACCURATE
+- doc/admin.notification.txt's single-endpoint surface, the { title, body }
+  body, and the { requested, sent, failed } report shape all still match the
+  code.
+- doc/notification.flutter.txt's statements that broadcasts target all
+  registered device tokens, that notification records are not saved in a
+  notification table, and that there is no GET /notification endpoint remain
+  correct and are restated above.
+
+CLARIFIED / NEWLY DOCUMENTED
+- `body: ""` is rejected (400) because the DTO combines @IsOptional with
+  @IsNotEmpty. You must omit the key rather than send an empty string.
+- A 201 does NOT mean delivery. requested: 0, or sent: 0 when Firebase is
+  unconfigured, are both successful responses. The old doc did not warn about
+  reading the report.
+- Explicitly flagged: the device query has no role or status filter, so banned
+  customers and admin-owned devices also receive broadcasts.
+- PAYMENT_STATUS_UPDATED is a new push type in the system, but it is emitted by
+  PATCH /order/:id/payment-status, not by this module. See admin.order.txt.

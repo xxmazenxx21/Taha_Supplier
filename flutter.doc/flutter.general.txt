@@ -1,0 +1,272 @@
+================================================================================
+FLUTTER — GENERAL RULES
+Read this before any other file in flutter.doc/.
+================================================================================
+
+1. MODULE
+--------------------------------------------------------------------------------
+Not a module — these are the cross-cutting rules that apply to every request the
+Flutter app makes: base URL, headers, the response envelope, the error shape,
+token lifetimes and the refresh flow, image paths, and which numeric fields are
+JSON numbers vs Decimal strings. Used by every screen.
+
+
+2. BASE URL
+--------------------------------------------------------------------------------
+There is NO global route prefix. No "/api". Routes sit at the root:
+
+    http://localhost:3000/home
+    http://localhost:3000/product
+    http://localhost:3000/auth/login
+
+The server listens on process.env.PORT, defaulting to 3000 (src/main.ts).
+
+CORS is enabled for any origin with credentials allowed, methods
+GET, HEAD, PUT, PATCH, POST, DELETE, OPTIONS.
+
+
+3. HEADERS
+--------------------------------------------------------------------------------
+Authentication (every endpoint except the @Public ones listed below):
+
+    Authorization: Bearer <access_token>
+
+Content-Type:
+    application/json          for every JSON body
+    multipart/form-data       only for POST /order and
+                              PATCH /order/:id/payment-proof
+
+PUBLIC endpoints (no Authorization header needed) — these are the ONLY ones:
+    POST /auth/signup
+    POST /auth/login
+    POST /auth/refresh
+    POST /auth/logout
+
+Everything else requires a valid JWT. Most client endpoints additionally require
+the role to be CLIENT.
+
+
+4. SUCCESS RESPONSE ENVELOPE
+--------------------------------------------------------------------------------
+A global ResponseInterceptor (src/interceptors/interceptor.ts) wraps EVERY
+successful response:
+
+    {
+      "message": "Success",
+      "data": <the actual payload>
+    }
+
+Rules the interceptor applies:
+  - If the controller returned an object containing a "message" key, that string
+    is used instead of "Success".
+  - If the controller returned an object containing a "data" key, that value
+    becomes data.
+  - If the returned object has exactly one key and it is "message", data is null.
+  - Otherwise the whole returned value becomes data.
+
+In Flutter, always read the payload from response["data"].
+
+ONE EXCEPTION — GET /order/:id/payment-proof streams raw image bytes with
+res.sendFile and is NOT wrapped. See flutter.order.txt.
+
+
+5. ERROR RESPONSES — NOT WRAPPED
+--------------------------------------------------------------------------------
+Errors use Nest's default shape and do NOT go through the envelope:
+
+    {
+      "message": "Product not found",
+      "error": "Not Found",
+      "statusCode": 404
+    }
+
+CRITICAL: "message" is either a STRING or an ARRAY OF STRINGS. Validation
+failures from the global ValidationPipe return an array:
+
+    {
+      "message": [
+        "name must be longer than or equal to 2 characters",
+        "email must be an email"
+      ],
+      "error": "Bad Request",
+      "statusCode": 400
+    }
+
+Your Flutter error parser must handle both. Suggested:
+
+    String readError(dynamic body) {
+      final m = body["message"];
+      if (m is List) return m.join("\n");
+      return m?.toString() ?? "Unexpected error";
+    }
+
+Common statuses:
+  400 Bad Request   validation failed, or a documented business rule
+  401 Unauthorized  missing / malformed / expired access token
+                    body: { "message": "Unauthorized", "statusCode": 401 }
+  403 Forbidden     token is valid but the role is wrong, or the account is
+                    banned. Exact strings:
+                      "You do not have permission (no role found)"
+                      "You do not have the required roles to access this resource"
+                      "Account is banned"
+  404 Not Found     the resource does not exist (or is not yours)
+  409 Conflict      state conflict (cart empty, coupon expired, order not
+                    cancellable, ...)
+  500               unexpected server error
+
+
+6. GLOBAL VALIDATION RULES
+--------------------------------------------------------------------------------
+The ValidationPipe runs with { whitelist: true, forbidNonWhitelisted: true,
+transform: true }.
+
+  - Any field you send that is NOT declared in the DTO causes 400, it is not
+    silently ignored. Do not send extra keys.
+  - Query params and multipart fields arrive as strings and are coerced by
+    @Type(() => Number) / @Transform where the DTO declares it. Where a DTO
+    declares a boolean WITHOUT a transform, you must send a real JSON boolean.
+  - Booleans in query strings / multipart are accepted as the literal strings
+    "true" and "false" wherever the DTO has a @Transform (noted per endpoint).
+
+
+7. TOKENS AND THE 401 -> REFRESH FLOW
+--------------------------------------------------------------------------------
+access_token   JWT, expires in 15 MINUTES (JwtModule signOptions expiresIn '15m')
+               payload: { sub: <userId>, email, role }
+refresh_token  opaque random string (base64url), valid 30 DAYS
+
+ROTATION / SINGLE USE: POST /auth/refresh revokes the refresh token you sent and
+issues a brand new one. A refresh token can be used EXACTLY ONCE. Replaying an
+already-used token returns 401 "Refresh token has already been used".
+
+Required client behaviour:
+
+  1. Store access_token and refresh_token securely.
+  2. On any 401, call POST /auth/refresh with the stored refresh_token.
+  3. Overwrite BOTH stored tokens with the pair that comes back, then retry the
+     original request once.
+  4. If the refresh itself fails with 401 or 403, wipe both tokens and send the
+     user back to Login.
+  5. Serialise refreshes. Two concurrent refreshes with the same token will make
+     one of them fail with "Refresh token has already been used" and log the
+     user out for no reason. Use a single-flight lock / mutex.
+
+BANNED ACCOUNTS: a banned user is rejected at login AND at refresh with
+403 "Account is banned". Because access tokens live 15 minutes, a user banned
+mid-session keeps working until their current access token expires, then the
+refresh fails and they are locked out. Treat 403 "Account is banned" anywhere as
+"log out immediately".
+
+LOGOUT: POST /auth/logout revokes one refresh token. It is @Public and takes the
+refresh_token in the body. Changing the password (PATCH /profile/password)
+revokes ALL of the user's refresh tokens and returns a fresh pair.
+
+
+8. IMAGES — PATHS ARE RELATIVE
+--------------------------------------------------------------------------------
+Image fields that were uploaded through the admin dashboard come back as
+SERVER-RELATIVE paths with a leading slash, never as absolute URLs:
+
+    "image": "/uploads/products/9f1c2e44-....jpg"
+    "logo":  "/uploads/brands/8c11abb7-....png"
+    "image_url": "/uploads/banners/ca263286-....png"
+
+You MUST prefix them with the base URL before handing them to Image.network:
+
+    final url = "$baseUrl${product.image}";   // http://localhost:3000/uploads/...
+
+These are served statically by the backend at /uploads (ServeStaticModule
+mapped to <cwd>/uploads), so no Authorization header is needed to fetch them.
+
+CAVEAT: some product rows may hold a FULL external URL instead (for example
+seeded/demo data pointing at a CDN). Guard before prefixing:
+
+    String imageUrl(String p) =>
+        p.startsWith("http") ? p : "$baseUrl$p";
+
+PAYMENT RECEIPTS ARE DIFFERENT. order.payment_proof_image holds a path like
+"private-uploads/payment-proofs/<uuid>.jpg" (no leading slash). That folder is
+deliberately NOT served statically — fetching it directly returns 404. Receipts
+are only readable through GET /order/:id/payment-proof, which checks ownership.
+Never build an <img> URL from payment_proof_image.
+
+
+9. NUMBERS: JSON NUMBER vs DECIMAL STRING
+--------------------------------------------------------------------------------
+The database stores money and rating as Postgres DECIMAL. Some endpoints convert
+those to JSON numbers; others return the raw Prisma value, which serialises as a
+STRING. This is inconsistent in the current backend, so the table below is
+authoritative. Parse defensively:
+
+    double asNum(dynamic v) =>
+        v == null ? 0 : (v is num ? v.toDouble() : double.parse(v.toString()));
+
+ENDPOINTS THAT RETURN JSON NUMBERS
+  GET /home
+      offers/best_sellers/suggested/reordered[]:
+        price              number (rounded to integer)
+        discount_price     number (rounded) or null
+        discount_percentage number or null (NOT rounded)
+        rating             number
+  GET /product, GET /product/search, GET /product/:id
+        price, discount_price, discount_percentage, rating  -> numbers
+        (price/discount_price are NOT rounded here)
+  GET /cart
+        subtotal, discount_amount, total        number (rounded to integer)
+        items[].effective_price, items[].line_total  number (rounded)
+  GET /order, GET /order/:id, PATCH /order/:id/cancel,
+  PATCH /order/:id/payment-proof
+        subtotal, discount_amount, shipping_fee, total_amount  number (rounded)
+        items[].unit_price, items[].total_price                number (rounded)
+        shippingZone.shipping_cost                             number (rounded)
+  GET /profile, PATCH /profile
+        latitude, longitude  number or null
+
+ENDPOINTS THAT RETURN DECIMAL STRINGS — parse them yourself
+  GET /shipping-zone
+        shipping_cost        STRING, e.g. "30"
+  GET /cart
+        items[].product.price           STRING, e.g. "273.00"
+        items[].product.discount_price  STRING or null
+        items[].product.rating          STRING
+        coupon.discount_value           STRING, e.g. "10"
+        coupon.min_order_amount         STRING or null
+        (the cart's own computed totals are numbers — see above. Use
+         effective_price / line_total and ignore items[].product.price.)
+
+Integers are always plain JSON numbers: all ids, quantity, review_count,
+display_order, sort_order, usage_limit, usage_count, and review.rating
+(review.rating is an Int column, 1..5).
+
+Dates are ISO-8601 UTC strings: "2026-10-08T19:18:39.301Z".
+
+Currency is implicitly EGP. There is no currency field.
+
+
+10. BUSINESS RULES / GOTCHAS
+--------------------------------------------------------------------------------
+- Product visibility for the client: a product is only returned when
+  is_available = true AND its sub-category is_hidden = false AND (on
+  GET /product) its parent category is_hidden = false. Admin endpoints ignore
+  all three.
+- effective_price = discount_price ?? price. Always show discount_price when it
+  is non-null, with price struck through.
+- GET /product paginates with page / per_page (default per_page = 10).
+  GET /product/search does NOT paginate — it returns at most 20 rows.
+- The cart is created on demand. GET /cart never 404s for a logged-in client.
+- Cart totals are computed live and never stored.
+- Only CLIENT tokens may call the catalog read endpoints (/product and
+  /product/:id are @Roles(CLIENT)). An ADMIN token gets 403 there.
+
+
+11. CHANGELOG vs THE OLD doc/ FOLDER
+--------------------------------------------------------------------------------
+- Access tokens are 15 minutes and refresh tokens rotate. The old
+  doc/AI_RULES.txt claimed "JWT tokens signed indefinitely (3650d expiry). No
+  refresh token mechanism." That was wrong.
+- Errors are explicitly documented as possibly carrying a string ARRAY in
+  "message". The old docs showed only single strings.
+- The old docs said uploads max out at 5MB. The real shared limit is 10MB
+  (brand logos are the exception at 5MB — admin concern only).
+- /uploads is now actually served by the backend (ServeStaticModule). Older docs
+  implied the paths were not reachable.

@@ -1,0 +1,428 @@
+================================================================================
+FLUTTER — ORDER MODULE
+================================================================================
+
+1. MODULE
+--------------------------------------------------------------------------------
+Checkout and order history. Creating an order converts the cart into an
+immutable Order + OrderItem snapshot (names and prices are copied, so later
+catalog edits never change order history), consumes the coupon, and empties the
+cart. CARD orders carry a bank-transfer receipt image that an admin reviews.
+Backed by src/order/. Used by: the Checkout screen and the My Orders screens.
+
+
+2. ENDPOINT SUMMARY
+--------------------------------------------------------------------------------
+METHOD | PATH                          | ROLE          | PURPOSE
+-------|-------------------------------|---------------|------------------------
+POST   | /order                        | CLIENT        | Place an order (multipart)
+GET    | /order                        | CLIENT        | My orders (newest first)
+GET    | /order/:id                    | CLIENT        | One of my orders
+PATCH  | /order/:id/cancel             | CLIENT        | Cancel (48h, limited status)
+PATCH  | /order/:id/payment-proof      | CLIENT        | Re-upload a REJECTED receipt
+GET    | /order/:id/payment-proof      | ADMIN, CLIENT | Download the receipt image
+
+NOT for the app (ADMIN only): PATCH /order/:id,
+PATCH /order/:id/payment-status, GET /order/admin, GET /order/admin/:id,
+GET /order/admin/cancelled.
+
+
+3. STATUS ENUMS
+--------------------------------------------------------------------------------
+status (OrderStatus) — the fulfilment lifecycle, set by staff:
+    PENDING          just placed, awaiting confirmation   (the default)
+    CONFIRMED        confirmed by admin / orders staff
+    PROCESSING       being prepared
+    SHIPPED          handed to delivery
+    DELIVERED        received by the client
+    CANCELLED        cancelled by an ADMIN
+    CLIENTCANCELLED  cancelled by the client via PATCH /order/:id/cancel
+
+payment_status (PaymentStatus) — only meaningful for CARD orders:
+    PENDING    not yet reviewed (the default for both CASH and CARD)
+    APPROVED   an admin accepted the receipt image
+    REJECTED   an admin rejected it — the client must re-upload
+
+payment_method (PaymentMethod):
+    CASH   cash on delivery, no receipt
+    CARD   manual bank transfer, receipt image REQUIRED
+
+UI guidance: show payment_status only when payment_method == "CARD". For CASH
+orders it stays PENDING forever and means nothing. `delivered_at` exists in the
+schema but NO code ever sets it — always null, ignore it.
+
+
+4. ENDPOINTS
+--------------------------------------------------------------------------------
+
+================================================================================
+4.1  POST /order   — multipart/form-data
+================================================================================
+Role: CLIENT
+Content-Type: multipart/form-data  (NOT application/json — this changed)
+
+FORM FIELDS
+shipping_zone_id | int    | REQUIRED | integer, min 1. From GET /shipping-zone.
+payment_method   | enum   | REQUIRED | exactly "CASH" or "CARD"
+delivery_address | string | REQUIRED | non-empty
+delivery_lat     | number | optional | max 7 decimal places
+delivery_lng     | number | optional | max 7 decimal places
+delivery_notes   | string | optional | any string
+
+FILE FIELD
+payment_proof    | file   | conditional | single file (max count 1)
+                              allowed mime: image/jpeg, image/jpg, image/png,
+                                            image/webp
+                              max size: 10 MB
+                              REQUIRED when payment_method = CARD
+                              MUST BE ABSENT when payment_method = CASH
+
+You must NOT send a `payment_proof_image` text field. It was removed from the
+DTO — sending it returns 400 (forbidNonWhitelisted). The stored path is derived
+server-side from the uploaded file.
+
+The numeric/enum fields arrive as multipart strings and are coerced by the DTO,
+so send them as plain text parts.
+
+REQUEST EXAMPLE (CARD)
+    POST /order
+    Content-Type: multipart/form-data
+      shipping_zone_id: 1
+      payment_method:   CARD
+      delivery_address: 12 Tahrir St, Cairo
+      delivery_lat:     30.0444196
+      delivery_lng:     31.2357116
+      delivery_notes:   Call on arrival
+      payment_proof:    <receipt.jpg binary>
+
+SUCCESS 201
+    {
+      "message": "Success",
+      "data": {
+        "id": 18,
+        "user_id": 12,
+        "coupon_id": 1,
+        "shipping_zone_id": 1,
+        "status": "PENDING",
+        "payment_method": "CARD",
+        "payment_status": "PENDING",
+        "payment_proof_image": "private-uploads/payment-proofs/7b2f....jpg",
+        "subtotal": 910,
+        "discount_amount": 91,
+        "shipping_fee": 30,
+        "total_amount": 849,
+        "delivery_address": "12 Tahrir St, Cairo",
+        "delivery_lat": "30.0444196",
+        "delivery_lng": "31.2357116",
+        "delivery_notes": "Call on arrival",
+        "created_at": "2026-10-08T23:28:13.987Z",
+        "updated_at": "2026-10-08T23:28:13.987Z",
+        "delivered_at": null,
+        "items": [
+          {
+            "id": 44,
+            "order_id": 18,
+            "product_id": 7,
+            "quantity": 2,
+            "unit_price": 455,
+            "total_price": 910,
+            "product_name": "Lavazza Qualita Oro 1kg",
+            "product_unit": "كجم"
+          }
+        ],
+        "shippingZone": undefined
+      }
+    }
+
+NUMBER TYPES
+  JSON NUMBERS (rounded to whole numbers):
+      subtotal, discount_amount, shipping_fee, total_amount,
+      items[].unit_price, items[].total_price
+  DECIMAL STRINGS:
+      delivery_lat, delivery_lng  (e.g. "30.0444196") — parse if you need them
+  total_amount = subtotal - discount_amount + shipping_fee
+
+  NOTE: on POST /order the response has no shippingZone relation loaded, so the
+  key is absent/undefined. GET /order and GET /order/:id DO include it.
+
+  payment_proof_image is a PRIVATE path with no leading slash. It is NOT
+  fetchable as a static URL. Use GET /order/:id/payment-proof instead.
+
+ERRORS — validation
+  400 ["shipping_zone_id must not be less than 1"]
+  400 ["payment_method must be one of the following values: CASH, CARD"]
+  400 ["delivery_address should not be empty"]
+  400 "payment_proof is required for card payments"
+      (payment_method = CARD and no file)
+  400 "payment_proof is only accepted for card payments"
+      (payment_method = CASH and a file was sent — the file is deleted first)
+  400 `File "x.gif" has an invalid type. Allowed: jpeg, jpg, png, webp`
+
+ERRORS — checkout conflicts (409)
+  "Cart is empty"
+  "Cart contains an invalid quantity"
+  `Product "<name>" is not available`
+      (a cart product went unavailable or its sub-category was hidden)
+  "Shipping zone does not exist or is inactive"
+  "Coupon is no longer available"
+  "Coupon is paused or inactive"
+  "Coupon is not active yet"
+  "Coupon has expired"
+  "Coupon usage limit reached"
+  "Minimum order amount of <amount> not met"
+  "You have already used this coupon"
+  "Coupon usage limit was reached during checkout"
+  "Checkout could not be completed because the cart changed concurrently"
+      (the serializable transaction was retried 3 times and still conflicted —
+       safe to retry the whole request)
+
+ERRORS — other
+  401 Unauthorized / 403 role error
+
+BUSINESS RULES
+  - The whole checkout runs in ONE SERIALIZABLE transaction with row locks on
+    the cart, its items, the products and the shipping zone, retried up to 3
+    times on serialization failure. Either everything commits or nothing does.
+  - Prices are SNAPSHOTTED: unit_price = discount_price ?? price at order time,
+    and product_name / product_unit are copied into OrderItem.
+  - shipping_fee is snapshotted from the chosen ShippingZone.shipping_cost. The
+    zone must exist AND be is_active = true.
+  - The coupon attached to the cart is applied and CONSUMED (a CouponUsage row
+    is written). Consumption is permanent — cancelling the order does NOT give
+    the coupon back.
+  - ON SUCCESS the cart is emptied and its coupon_id is cleared. Refetch
+    GET /cart (it will be empty).
+  - If anything fails, the uploaded receipt file is deleted from disk, so a
+    failed attempt leaves no orphan.
+  - payment_status is always PENDING on creation; you cannot set it.
+  - A push notification (type ORDER_CREATED) is sent to all of the user's
+    devices after commit. A push failure never fails the order.
+
+================================================================================
+4.2  GET /order
+================================================================================
+Role: CLIENT. No params, no body. Returns MY orders only (filtered by
+req.user.sub).
+
+SUCCESS 200 — a PLAIN ARRAY (no pagination)
+    {
+      "message": "Success",
+      "data": [
+        {
+          "id": 18,
+          "user_id": 12,
+          "coupon_id": 1,
+          "shipping_zone_id": 1,
+          "status": "PENDING",
+          "payment_method": "CARD",
+          "payment_status": "PENDING",
+          "payment_proof_image": "private-uploads/payment-proofs/7b2f....jpg",
+          "subtotal": 910,
+          "discount_amount": 91,
+          "shipping_fee": 30,
+          "total_amount": 849,
+          "delivery_address": "12 Tahrir St, Cairo",
+          "delivery_lat": "30.0444196",
+          "delivery_lng": "31.2357116",
+          "delivery_notes": "Call on arrival",
+          "created_at": "2026-10-08T23:28:13.987Z",
+          "updated_at": "2026-10-08T23:28:13.987Z",
+          "delivered_at": null,
+          "items": [ { ...OrderItem, unit_price/total_price as numbers... } ],
+          "shippingZone": {
+            "id": 1,
+            "name": "القاهرة",
+            "shipping_cost": 30,
+            "is_active": true,
+            "display_order": 0,
+            "created_at": "2026-10-08T19:18:39.301Z",
+            "updated_at": "2026-10-08T19:18:39.301Z"
+          }
+        }
+      ]
+    }
+
+ORDERING: created_at DESC (newest first).
+NOTE: shippingZone.shipping_cost is a NUMBER here (converted), unlike
+GET /shipping-zone where it is a string.
+There is NO pagination and no limit — the array grows with the user's history.
+
+ERRORS
+  401 / 403
+
+================================================================================
+4.3  GET /order/:id
+================================================================================
+Role: CLIENT
+
+PATH PARAMS
+id | int | REQUIRED | must be a positive integer
+
+SUCCESS 200 — one order, same object shape as an element of GET /order
+    { "message": "Success", "data": { ...order with items + shippingZone... } }
+
+ERRORS
+  400 "Invalid order id"   (non-numeric, zero or negative)
+  404 "Order not found"    (unknown id OR the order belongs to another user —
+                            the same message is used, so ownership is not
+                            leaked)
+  401 / 403
+
+================================================================================
+4.4  PATCH /order/:id/cancel
+================================================================================
+Role: CLIENT. No body.
+
+PATH PARAMS
+id | int | REQUIRED | positive integer
+
+SUCCESS 200 — the updated order, status now CLIENTCANCELLED
+    {
+      "message": "Success",
+      "data": {
+        "id": 18,
+        "status": "CLIENTCANCELLED",
+        ...items and shippingZone included...
+      }
+    }
+
+ERRORS
+  400 "Invalid order id"
+  404 "Order not found"                   (unknown id or not mine)
+  409 "Order is already cancelled"        (already CANCELLED or CLIENTCANCELLED)
+  409 "Orders can only be cancelled within 48 hours of creation"
+  409 "Order can no longer be cancelled"  (status is not PENDING or CONFIRMED)
+  401 / 403
+
+BUSINESS RULES — BOTH conditions must hold
+  1. now - created_at <= 48 HOURS
+  2. status is PENDING or CONFIRMED
+  Once the order reaches PROCESSING, SHIPPED or DELIVERED it can no longer be
+  cancelled by the client even inside the 48h window.
+  Checks run in this order: already-cancelled -> 48h window -> status gate, so
+  an old PROCESSING order reports the 48h message rather than the status one.
+
+  Cancelling does NOT refund the coupon usage and does NOT restore stock
+  (there is no stock tracking).
+
+  UI: only show the Cancel button when
+      (status == "PENDING" || status == "CONFIRMED") &&
+      DateTime.now().difference(createdAt).inHours < 48
+
+================================================================================
+4.5  PATCH /order/:id/payment-proof   — multipart/form-data
+================================================================================
+Role: CLIENT
+Content-Type: multipart/form-data
+
+Re-upload a bank-transfer receipt after an admin REJECTED the previous one.
+
+PATH PARAMS
+id | int | REQUIRED | positive integer
+
+FILE FIELD
+payment_proof | file | REQUIRED | single file, max count 1
+                                  allowed mime: image/jpeg, image/jpg,
+                                                image/png, image/webp
+                                  max size: 10 MB
+
+No other fields are accepted.
+
+SUCCESS 200 — the updated order; payment_status is reset to PENDING
+    {
+      "message": "Success",
+      "data": {
+        "id": 18,
+        "payment_method": "CARD",
+        "payment_status": "PENDING",
+        "payment_proof_image": "private-uploads/payment-proofs/newfile....jpg",
+        ...items and shippingZone included...
+      }
+    }
+
+ERRORS
+  400 "payment_proof is required"        (no file part sent)
+  400 "Invalid order id"
+  400 invalid mime / oversize messages
+  404 "Order not found"                  (unknown id or not mine)
+  409 "Only card orders accept a payment proof"            (method is CASH)
+  409 "A cancelled order cannot accept a new payment proof" (CANCELLED or
+                                                             CLIENTCANCELLED)
+  409 "A new payment proof can only be uploaded after the previous one was
+       rejected"                          (payment_status is not REJECTED)
+  401 / 403
+
+BUSINESS RULES — ALL must hold
+  - the order is mine
+  - payment_method = CARD
+  - payment_status = REJECTED
+  - status is not CANCELLED and not CLIENTCANCELLED
+  On any failure the newly uploaded file is deleted from disk first. The OLD
+  receipt is deleted only AFTER the database update commits.
+  payment_status goes back to PENDING so the admin can review again.
+
+  UI: only show "Re-upload receipt" when
+      payment_method == "CARD" && payment_status == "REJECTED" &&
+      status != "CANCELLED" && status != "CLIENTCANCELLED"
+
+================================================================================
+4.6  GET /order/:id/payment-proof
+================================================================================
+Role: ADMIN or CLIENT (for a CLIENT, ownership is enforced in the service)
+
+Returns the RAW IMAGE BYTES. This endpoint is NOT wrapped in the
+{ message, data } envelope — it streams the file with res.sendFile.
+
+PATH PARAMS
+id | int | REQUIRED | positive integer
+
+SUCCESS 200
+    Content-Type: image/jpeg (or png/webp, from the stored file)
+    <binary image data>
+
+Use it directly in Flutter, remembering the Authorization header is required:
+
+    Image.network(
+      "$baseUrl/order/$orderId/payment-proof",
+      headers: { "Authorization": "Bearer $accessToken" },
+    );
+
+ERRORS (these ARE normal JSON, because they are thrown before streaming starts)
+  400 "Invalid order id"
+  404 "Order not found"          (unknown id, or not mine when role is CLIENT)
+  404 "Payment proof not found"  (no receipt stored, the stored path failed the
+                                  traversal guard, or the file is missing on
+                                  disk)
+  401 / 403
+
+BUSINESS RULES
+  - A CLIENT can only read their OWN receipt. An ADMIN can read any.
+  - Never try to construct a URL from payment_proof_image yourself; the
+    private-uploads folder is deliberately not served statically.
+
+
+5. CHANGELOG vs THE OLD doc/ FOLDER
+--------------------------------------------------------------------------------
+BREAKING
+- POST /order is now multipart/form-data. It used to be application/json.
+- `payment_proof_image` was REMOVED from the create body. The client can no
+  longer supply a path; it must upload the file in the `payment_proof` field.
+  Sending payment_proof_image now returns 400.
+- CARD orders now REQUIRE the file: 400 "payment_proof is required for card
+  payments". The old message was "payment_proof_image is required for card
+  payments".
+- Sending a file with payment_method = CASH is now an error (400), where the old
+  behaviour silently ignored it.
+- Client cancellation now additionally requires status PENDING or CONFIRMED
+  (409 "Order can no longer be cancelled"). Previously only the 48h window was
+  checked, so a SHIPPED order could be cancelled.
+
+NEW
+- PATCH /order/:id/payment-proof (re-upload after rejection) did not exist.
+- GET /order/:id/payment-proof (view the receipt) did not exist.
+
+CORRECTED
+- Receipts are stored OUTSIDE the public uploads root, under
+  private-uploads/payment-proofs/, and are not statically served. Old docs
+  implied the proof was a normal /uploads/... image URL.
+- `delivered_at` is documented as permanently null: no code path sets it.

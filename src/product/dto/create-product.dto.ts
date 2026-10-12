@@ -66,7 +66,9 @@ export class CreateProductDto {
   price: number;
 
   @IsOptional()
-  @Type(() => Number)
+  @Transform(({ value }) =>
+  value === '' || value === 'null' || value === null ? null : Number(value),
+)
   @IsNumber()
   @Min(1)
   @IsLessThan('price')

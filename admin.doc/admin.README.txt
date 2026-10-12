@@ -1,0 +1,151 @@
+================================================================================
+ADMIN DASHBOARD API DOCUMENTATION — INDEX
+Audience: the web admin dashboard. Every endpoint here requires a token whose
+role is ADMIN (a few reads also accept CLIENT and say so).
+Source of truth: the current source code in src/ and prisma/models/.
+Last rebuilt from code: 2026-10-08
+================================================================================
+
+READ admin.general.txt FIRST. It defines the base URL, headers, the
+{ message, data } envelope, the error shape, the admin login + token flow, the
+multipart upload rules (field names, allowed types, size limits) and how image
+paths work. Every other file assumes you know those rules.
+
+--------------------------------------------------------------------------------
+FILES IN THIS FOLDER
+--------------------------------------------------------------------------------
+admin.general.txt          Base URL, headers, envelope, errors, tokens, upload
+                           rules, number vs Decimal-string reference.
+admin.auth.txt             POST /auth/adminDashboard/login
+                           POST /auth/adminDashboard/signup  (** @Public **)
+admin.category.txt         Category CRUD + GET /category/admin,
+                           GET /category/admin/:id
+admin.sub-category.txt     SubCategory CRUD + GET /sub-category/admin(/:id)
+admin.brand.txt            Brand CRUD + GET /brand/admin + linking and
+                           unlinking sub-categories
+admin.product.txt          Product CRUD + gallery image endpoints +
+                           the discount_price < price rule +
+                           GET /product/admin (paginated), /product/admin/:id
+admin.banner.txt           Banner CRUD + image_configs and click actions
+admin.coupon.txt           Coupon CRUD (percentage-only, hard delete)
+admin.shipping-zone.txt    ShippingZone create / update / admin reads
+admin.order.txt            Order list (paginated + filters), cancelled list,
+                           one order, update status, payment-status review,
+                           view payment proof
+admin.customers.txt        Customer list / detail / BAN & UNBAN
+                           ** NOT in the original doc plan — see NOTE below **
+admin.notification.txt     POST /notification/broadcast
+
+NOTE — EXTRA FILE: admin.customers.txt
+  The /customers module exists in the code (src/customers/, routes
+  GET /customers/admin, GET /customers/admin/:id,
+  PATCH /customers/admin/:id/status) and is ADMIN-only. It was not listed in the
+  documentation plan, so a file was created for it. It is the ONLY way to set a
+  user's status to BANNED, which is what makes the ban checks in login/refresh
+  reachable.
+
+--------------------------------------------------------------------------------
+WHICH DASHBOARD PAGE USES WHICH MODULE
+--------------------------------------------------------------------------------
+
+Login page
+    admin.auth.txt
+    POST /auth/adminDashboard/login
+
+Dashboard shell / navigation
+    No endpoint. The access token's `role` claim must be ADMIN.
+
+Categories page
+    admin.category.txt
+    GET    /category/admin           list, hidden included
+    GET    /category/admin/:id       edit form (+ all sub-categories)
+    POST   /category                 create (multipart, field `image`)
+    PATCH  /category/:id             update (multipart, field `image`)
+    DELETE /category/:id             HIDE (soft) — sets is_hidden = true
+
+Sub-categories page
+    admin.sub-category.txt
+    GET    /sub-category/admin?category_id=   list, hidden included, filterable
+    GET    /sub-category/admin/:id            edit form (+ parent + brands)
+    POST   /sub-category                      create (multipart, `image`)
+    PATCH  /sub-category/:id                  update (multipart, `image`)
+    DELETE /sub-category/:id                  HIDE (soft)
+
+Brands page
+    admin.brand.txt
+    GET    /brand/admin                             list (no relations)
+    GET    /brand/:id                               edit form (+ links)
+    POST   /brand                                   create (multipart, `logo`)
+    PATCH  /brand/:id                               update (multipart, `logo`)
+    DELETE /brand/:id                               SOFT delete (deleted_at)
+    POST   /brand/:id/subcategories                 link sub-categories
+    DELETE /brand/:id/subcategories/:subcategoryId  unlink one
+
+Products page
+    admin.product.txt
+    GET    /product/admin        paginated + search + filters
+    GET    /product/admin/:id    edit form (all columns + images with ids)
+    POST   /product              create (multipart: `image` 1 + `images` 10)
+    PATCH  /product/:id          update (multipart: `image`)
+    DELETE /product/:id          SOFT delete — sets is_available = false
+    POST   /product/:id/images             add gallery images
+    DELETE /product/:id/images/:imageId    remove one gallery image
+
+Banners page
+    admin.banner.txt
+    GET    /banner        list (active AND inactive)
+    GET    /banner/:id    one
+    POST   /banner        create (multipart `images` up to 10 + image_configs)
+    PATCH  /banner/:id    update fields, replace images, or re-configure
+    DELETE /banner/:id    HARD delete (rows + files)
+
+Coupons page
+    admin.coupon.txt
+    POST   /coupon        create
+    GET    /coupon        list
+    GET    /coupon/:id    one
+    PATCH  /coupon/:id    update
+    DELETE /coupon/:id    HARD delete
+
+Shipping zones page
+    admin.shipping-zone.txt
+    GET    /shipping-zone/admin       list, inactive included
+    GET    /shipping-zone/admin/:id   edit form
+    POST   /shipping-zone             create
+    PATCH  /shipping-zone/:id         update
+    (there is NO delete endpoint — deactivate with is_active = false)
+
+Orders page
+    admin.order.txt
+    GET    /order/admin                   paginated + filters
+    GET    /order/admin/cancelled         cancelled list (NOT paginated)
+    GET    /order/admin/:id               full detail for review
+    PATCH  /order/:id                     change fulfilment status
+    PATCH  /order/:id/payment-status      APPROVE / REJECT a CARD receipt
+    GET    /order/:id/payment-proof       stream the receipt image
+
+Customers page
+    admin.customers.txt
+    GET    /customers/admin                  paginated + search + status filter
+    GET    /customers/admin/:id              detail + last 10 orders
+    PATCH  /customers/admin/:id/status       BAN (reason required) / UNBAN
+
+Notifications / announcements page
+    admin.notification.txt
+    POST   /notification/broadcast
+
+--------------------------------------------------------------------------------
+THINGS THE DASHBOARD CANNOT DO (no endpoint exists)
+--------------------------------------------------------------------------------
+- Delete a shipping zone. Only create / update. Deactivate instead.
+- Moderate or delete a customer's review. The whole /review module is
+  @Roles(CLIENT); an ADMIN token gets 403 on every review route.
+- Read or edit another user's cart.
+- Create staff accounts with a role other than ADMIN or CLIENT. The enum has
+  DELIVERY, ORDERS_STAFF, ACCOUNTS_STAFF and SUPPORT, but no endpoint can
+  assign them.
+- Hard-delete a category, sub-category, product or brand. Those are soft
+  (is_hidden / is_available / deleted_at). Only coupons and banners hard-delete.
+- List or ban ADMIN accounts. /customers/admin only ever sees role = CLIENT.
+- See a notification history. Nothing is persisted when a push is sent.
+- Edit an order's items, prices, address or totals after creation.

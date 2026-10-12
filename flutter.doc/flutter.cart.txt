@@ -1,0 +1,346 @@
+================================================================================
+FLUTTER — CART MODULE (includes coupon apply / remove)
+================================================================================
+
+1. MODULE
+--------------------------------------------------------------------------------
+The shopping cart and the client side of coupons. One Cart per user, created on
+demand. Totals are NEVER stored — they are recomputed on every read, and an
+attached coupon is re-validated live on every read. Backed by src/cart/. Used
+by: the Cart screen and the Checkout screen.
+
+There is no flutter.coupon.txt: the /coupon module is ADMIN-only. A client can
+only attach a code to their cart and read the resulting discount.
+
+
+2. ENDPOINT SUMMARY
+--------------------------------------------------------------------------------
+METHOD | PATH                  | ROLE   | PURPOSE
+-------|-----------------------|--------|-------------------------------------
+GET    | /cart                 | CLIENT | My cart + live totals + coupon state
+POST   | /cart/items           | CLIENT | Add a product (merges quantity)
+PATCH  | /cart/items/:id       | CLIENT | Set an item's exact quantity
+DELETE | /cart/items/:id       | CLIENT | Remove an item
+POST   | /cart/apply-coupon    | CLIENT | Attach a coupon code, returns cart
+POST   | /cart/remove-coupon   | CLIENT | Detach the coupon, returns cart
+
+
+3. ENDPOINTS
+--------------------------------------------------------------------------------
+
+================================================================================
+3.1  GET /cart
+================================================================================
+Role: CLIENT. No params, no body. THE ONLY ENDPOINT THAT RETURNS TOTALS.
+
+SUCCESS 200
+    {
+      "message": "Success",
+      "data": {
+        "id": 4,
+        "user_id": 12,
+        "coupon_id": 1,
+        "created_at": "2026-10-07T20:41:02.311Z",
+        "updated_at": "2026-10-08T09:15:40.882Z",
+        "coupon": {
+          "id": 1,
+          "code": "WELCOME10",
+          "discount_value": "10",
+          "min_order_amount": null,
+          "start_date": "2026-09-08T00:00:00.000Z",
+          "end_date": "2026-12-07T00:00:00.000Z",
+          "usage_limit": 100,
+          "usage_count": 0,
+          "status": "ACTIVE",
+          "created_at": "2026-10-06T17:03:49.001Z"
+        },
+        "items": [
+          {
+            "id": 31,
+            "cart_id": 4,
+            "product_id": 7,
+            "quantity": 2,
+            "created_at": "2026-10-08T09:10:11.004Z",
+            "updated_at": "2026-10-08T09:15:40.871Z",
+            "product": {
+              "id": 7,
+              "subcategory_id": 1,
+              "brand_id": 2,
+              "name": "Lavazza Qualita Oro 1kg",
+              "description": "قهوة فاخرة ...",
+              "image": "/uploads/products/9f1c2e44-....jpg",
+              "price": "520.00",
+              "discount_price": "455.00",
+              "discount_percentage": "12.50",
+              "rating": "4.60",
+              "review_count": 38,
+              "is_best_seller": false,
+              "is_new": true,
+              "unit": "كجم",
+              "is_available": true,
+              "display_order": 0,
+              "created_at": "2026-10-06T17:03:48.766Z",
+              "updated_at": "2026-10-06T17:03:48.766Z"
+            },
+            "effective_price": 455,
+            "line_total": 910
+          }
+        ],
+        "coupon_valid": true,
+        "coupon_invalid_reason": null,
+        "subtotal": 910,
+        "discount_amount": 91,
+        "total": 819
+      }
+    }
+
+NUMBER TYPES — MIXED, READ CAREFULLY
+  JSON NUMBERS (rounded to whole numbers, safe to use directly):
+      items[].effective_price, items[].line_total,
+      subtotal, discount_amount, total
+  DECIMAL STRINGS (you must parse):
+      items[].product.price, items[].product.discount_price,
+      items[].product.discount_percentage, items[].product.rating,
+      coupon.discount_value, coupon.min_order_amount
+  => Render prices from effective_price / line_total. Only read
+     product.price (parsed) when you want to show the struck-through original.
+
+OTHER FIELD NOTES
+  coupon                  the full raw Coupon row, or null when none attached
+  coupon_valid            true / false / null. null means NO coupon attached.
+                          false means a coupon IS attached but is currently
+                          unusable, and discount_amount is 0.
+  coupon_invalid_reason   string explaining why, or null. Possible values:
+                            "Coupon not found"
+                            "Coupon is paused or inactive"
+                            "Coupon is not active yet"
+                            "Coupon has expired"
+                            "Coupon usage limit reached"
+                            "Minimum order amount of <amount> not met"
+                            "You have already used this coupon"
+  items                   [] for an empty cart
+  total                   subtotal - discount_amount. SHIPPING IS NOT INCLUDED.
+                          Add the chosen zone's shipping_cost at checkout.
+
+ERRORS
+  401 Unauthorized
+  403 role error
+
+BUSINESS RULES
+  - The cart is auto-created, so this NEVER returns 404 for a logged-in client.
+  - effective_price = discount_price ?? price, per item.
+  - LIVE COUPON RE-VALIDATION on every read. A coupon that was valid a minute
+    ago can flip to coupon_valid=false (expiry, usage limit, subtotal dropping
+    below min_order_amount). ALWAYS re-read coupon_valid before showing a
+    discount, and surface coupon_invalid_reason to the user.
+  - An invalid coupon is NOT detached from the cart. That is deliberate: the
+    user can fix their cart (e.g. add items to meet the minimum) without
+    retyping the code.
+
+================================================================================
+3.2  POST /cart/items
+================================================================================
+Role: CLIENT
+Content-Type: application/json
+
+BODY
+product_id | int | REQUIRED | integer, min 1
+quantity   | int | REQUIRED | integer, min 1
+
+REQUEST EXAMPLE
+    { "product_id": 7, "quantity": 2 }
+
+SUCCESS 201 — ONLY THE CART ITEM, NOT THE CART
+    {
+      "message": "Success",
+      "data": {
+        "id": 31,
+        "cart_id": 4,
+        "product_id": 7,
+        "quantity": 2,
+        "created_at": "2026-10-08T09:10:11.004Z",
+        "updated_at": "2026-10-08T09:10:11.004Z",
+        "product": { ...the full raw product, Decimals as STRINGS... }
+      }
+    }
+
+  There is NO subtotal / discount_amount / total here, and no coupon state.
+  >>> GOTCHA: after adding an item you MUST refetch GET /cart to refresh the
+  >>> totals and the coupon validity (adding items can make a
+  >>> min_order_amount coupon become valid).
+
+ERRORS
+  400 ["product_id must not be less than 1", "quantity must not be less than 1"]
+  404 "Product not found"
+  409 "Product is not available"      (product.is_available = false)
+  401 / 403
+
+BUSINESS RULES
+  - MERGE BEHAVIOUR: if the product is already in the cart, the quantities are
+    ADDED (existing.quantity + quantity). It does not replace. To set an exact
+    value use PATCH /cart/items/:id.
+  - There is no stock/quantity ceiling. Any positive integer is accepted.
+
+================================================================================
+3.3  PATCH /cart/items/:id
+================================================================================
+Role: CLIENT
+Content-Type: application/json
+
+PATH PARAMS
+id | int | REQUIRED | the CART ITEM id (items[].id), NOT the product id.
+                      Parsed with unary +.
+
+BODY
+quantity   | int | see gotcha | integer, min 1 — sets the EXACT new quantity
+product_id | int | optional   | ACCEPTED BY VALIDATION BUT COMPLETELY IGNORED
+                                by the controller. Do not send it.
+
+REQUEST EXAMPLE
+    { "quantity": 5 }
+
+SUCCESS 200 — the updated item (same shape as POST /cart/items)
+    {
+      "message": "Success",
+      "data": {
+        "id": 31,
+        "cart_id": 4,
+        "product_id": 7,
+        "quantity": 5,
+        "created_at": "2026-10-08T09:10:11.004Z",
+        "updated_at": "2026-10-08T09:21:03.550Z",
+        "product": { ...raw product... }
+      }
+    }
+
+ERRORS
+  400 ["quantity must not be less than 1"]   (sending quantity: 0 or negative)
+  404 "Cart item not found"   (bad id, or the item belongs to another user)
+  404 "Product not found"     (the underlying product row vanished)
+  409 "Product is not available"  (only when quantity > 0)
+  401 / 403
+
+>>> CRITICAL GOTCHA — OMITTING quantity DELETES THE ITEM
+    quantity is OPTIONAL at the DTO level (UpdateCartItemDto is a PartialType).
+    The controller does `dto.quantity ?? 0` and the service deletes the item
+    whenever the quantity is <= 0. So:
+        PATCH /cart/items/31  with body {}        -> item is DELETED,
+                                                     response { "deleted": true }
+        PATCH /cart/items/31  with {"quantity":0} -> 400 (blocked by @Min(1))
+    ALWAYS send an explicit quantity >= 1 here. To remove an item, use
+    DELETE /cart/items/:id — do not rely on this side effect.
+
+    The delete path returns:
+        { "message": "Success", "data": { "deleted": true } }
+
+>>> Refetch GET /cart afterwards for fresh totals.
+
+================================================================================
+3.4  DELETE /cart/items/:id
+================================================================================
+Role: CLIENT
+
+PATH PARAMS
+id | int | REQUIRED | the CART ITEM id. Parsed with unary +.
+
+SUCCESS 200
+    { "message": "Success", "data": { "deleted": true } }
+
+ERRORS
+  404 "Cart item not found"   (bad id, or the item belongs to another user)
+  401 / 403
+
+This is the correct, explicit way to remove a line. Refetch GET /cart after.
+
+================================================================================
+3.5  POST /cart/apply-coupon
+================================================================================
+Role: CLIENT
+Content-Type: application/json
+
+BODY
+code | string | REQUIRED | non-empty. Matched EXACTLY (case-sensitive) against
+                           Coupon.code.
+
+REQUEST EXAMPLE
+    { "code": "WELCOME10" }
+
+SUCCESS 200 — THE FULL CART, identical shape to GET /cart (totals included)
+    { "message": "Success", "data": { ...same as GET /cart... } }
+
+  No refetch needed here — this response already carries the recomputed totals.
+
+ERRORS
+  400 ["code should not be empty"]
+  404 "Coupon not found"                        (unknown code)
+  409 "Coupon is paused or inactive"            (status = PAUSED)
+  409 "Coupon is not active yet"                (now < start_date)
+  409 "Coupon has expired"                      (now > end_date)
+  409 "Coupon usage limit reached"              (usage_count >= usage_limit)
+  409 "Minimum order amount of <amount> not met"  e.g.
+      "Minimum order amount of 500 not met"
+  409 "You have already used this coupon"       (a CouponUsage row exists for
+                                                 this user + coupon)
+  401 / 403
+
+BUSINESS RULES
+  - ONE coupon per cart. Applying a new code REPLACES the previous one silently.
+  - Applying does NOT consume the coupon. No CouponUsage row is created until
+    the order is successfully placed, and usage is permanent after that (it is
+    not restored if the order is later cancelled).
+  - A coupon can only be used ONCE PER USER (unique on coupon_id + user_id).
+  - discount_value is a PERCENTAGE. There are no fixed-amount coupons.
+    discount_amount = round(subtotal * discount_value / 100).
+  - min_order_amount is checked against the SUBTOTAL (before discount, and
+    excluding shipping).
+  - The validation here is the same set of checks that runs live on GET /cart
+    and again inside the checkout transaction.
+
+================================================================================
+3.6  POST /cart/remove-coupon
+================================================================================
+Role: CLIENT
+Content-Type: application/json (NO BODY REQUIRED — send nothing, or {})
+
+SUCCESS 200 — THE FULL CART, identical shape to GET /cart
+    { "message": "Success", "data": { ...coupon: null, coupon_valid: null... } }
+
+ERRORS
+  401 / 403
+
+BUSINESS RULES
+  - Idempotent. Calling it with no coupon attached is a no-op and still returns
+    the cart with coupon: null and coupon_valid: null.
+  - Do not send any body fields — forbidNonWhitelisted would reject unknown keys
+    (the handler takes no DTO, so send an empty body).
+
+
+4. CHECKOUT HAND-OFF
+--------------------------------------------------------------------------------
+GET /cart gives subtotal / discount_amount / total WITHOUT shipping. The final
+amount is computed server-side when the order is created:
+
+    total_amount = subtotal - discount_amount + shipping_fee
+
+To preview it, add the chosen zone's shipping_cost (GET /shipping-zone — note
+it arrives as a STRING) to `total`. The authoritative numbers come back from
+POST /order. See flutter.order.txt.
+
+A successful order CLEARS all cart items and detaches the coupon.
+
+
+5. CHANGELOG vs THE OLD doc/ FOLDER
+--------------------------------------------------------------------------------
+CONFIRMED STILL ACCURATE
+- doc/flutter.cart.txt's endpoint list, the coupon error strings, the
+  coupon_valid / coupon_invalid_reason contract, and the merge-on-add behaviour
+  all still match the code and are preserved above.
+
+NEWLY DOCUMENTED (was missing, and is a real trap)
+- PATCH /cart/items/:id with no `quantity` DELETES the item and returns
+  { "deleted": true }. The old doc described quantity as "required, min 1",
+  which is only half true — it is optional at the DTO level.
+- UpdateCartItemDto still accepts `product_id`, which the controller ignores.
+- The precise mix of JSON numbers vs Decimal strings inside a single /cart
+  response (computed totals are numbers, the embedded raw product and coupon are
+  strings) was not documented before.

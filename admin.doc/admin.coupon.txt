@@ -1,0 +1,339 @@
+================================================================================
+ADMIN — COUPON MODULE
+================================================================================
+
+1. MODULE
+--------------------------------------------------------------------------------
+Percentage discount coupons. ADMIN-ONLY in every direction: there is no
+client-facing coupon endpoint at all. A client only ever touches a coupon by
+sending its CODE to POST /cart/apply-coupon. Delete is HARD. Backed by
+src/coupon/. Used by: the Coupons page.
+
+
+2. ENDPOINT SUMMARY
+--------------------------------------------------------------------------------
+METHOD | PATH          | ROLE  | PURPOSE
+-------|---------------|-------|---------------------------------------------
+POST   | /coupon       | ADMIN | Create a coupon
+GET    | /coupon       | ADMIN | List all (no filters, no pagination)
+GET    | /coupon/:id   | ADMIN | One coupon
+PATCH  | /coupon/:id   | ADMIN | Update
+DELETE | /coupon/:id   | ADMIN | HARD delete
+
+The whole controller is decorated @Roles('ADMIN') at class level, so every route
+requires ADMIN.
+
+
+3. HOW COUPONS WORK (read before building the form)
+--------------------------------------------------------------------------------
+- PERCENTAGE ONLY. `discount_value` is a percentage, constrained to 1..100.
+  There are no fixed-amount coupons anywhere in the system.
+      discount_amount = round(cart_subtotal * discount_value / 100)
+- min_order_amount is checked against the cart SUBTOTAL (before discount and
+  excluding shipping).
+- ONE USE PER USER, enforced by a unique index on CouponUsage
+  (coupon_id + user_id). A user who has used a coupon once can never use it
+  again.
+- `usage_count` is incremented and a CouponUsage row written only when an ORDER
+  is successfully placed — NOT when the coupon is applied to a cart.
+- CONSUMPTION IS PERMANENT. Cancelling an order does NOT decrement usage_count
+  and does NOT delete the CouponUsage row, so the customer cannot reuse it.
+- `usage_limit` is the global cap across all users. null means unlimited.
+- "EXPIRED" IS NOT A STATUS. CouponStatus has only ACTIVE and PAUSED. A coupon
+  is expired when end_date is in the past while status is still ACTIVE. Compute
+  the display state in the dashboard:
+      if (status === "PAUSED")                 -> Paused
+      else if (end_date && now > end_date)     -> Expired
+      else if (start_date && now < start_date)  -> Scheduled
+      else if (usage_limit && usage_count >= usage_limit) -> Exhausted
+      else                                      -> Active
+- VALIDATION RUNS THREE TIMES on the client side of things: on
+  POST /cart/apply-coupon, live on every GET /cart, and again inside the
+  checkout transaction. The messages a client sees are listed in
+  flutter.doc/flutter.cart.txt.
+
+
+4. ENDPOINTS
+--------------------------------------------------------------------------------
+
+================================================================================
+4.1  POST /coupon
+================================================================================
+Role: ADMIN
+Content-Type: application/json
+
+BODY
+code             | string | REQUIRED | any non-empty string (@IsString only —
+                                       no length, case or charset rule).
+                                       MUST BE UNIQUE. Matched case-SENSITIVELY
+                                       when a client applies it.
+discount_value   | number | REQUIRED | min 1, max 100 (a percentage)
+min_order_amount | number | optional | any number (@IsNumber only — NO minimum,
+                                       so a negative value is accepted)
+start_date       | string | optional | ISO-8601 date string (@IsDateString)
+end_date         | string | optional | ISO-8601 date string (@IsDateString)
+usage_limit      | int    | optional | integer (@IsInt only — NO minimum, so 0
+                                       or a negative value is accepted)
+status           | enum   | optional | "ACTIVE" or "PAUSED", default ACTIVE
+
+REQUEST EXAMPLE
+    {
+      "code": "WELCOME10",
+      "discount_value": 10,
+      "min_order_amount": 500,
+      "start_date": "2026-10-01T00:00:00.000Z",
+      "end_date": "2026-12-31T23:59:59.000Z",
+      "usage_limit": 100,
+      "status": "ACTIVE"
+    }
+
+SUCCESS 201
+    {
+      "message": "Success",
+      "data": {
+        "id": 1,
+        "code": "WELCOME10",
+        "discount_value": "10",
+        "min_order_amount": "500",
+        "start_date": "2026-10-01T00:00:00.000Z",
+        "end_date": "2026-12-31T23:59:59.000Z",
+        "usage_limit": 100,
+        "usage_count": 0,
+        "status": "ACTIVE",
+        "created_at": "2026-10-06T17:03:49.001Z"
+      }
+    }
+
+>>> discount_value and min_order_amount COME BACK AS DECIMAL STRINGS ("10",
+>>> "500"), even though you SENT numbers. Parse them in the dashboard.
+>>> usage_limit, usage_count and id are plain integers.
+>>> Coupon has NO updated_at column.
+>>> min_order_amount is null when omitted.
+
+ERRORS
+  400 ["discount_value must not be less than 1"]
+  400 ["discount_value must not be greater than 100"]
+  400 ["code must be a string"]
+  400 ["start_date must be a valid ISO 8601 date string"]
+  400 ["status must be one of the following values: ACTIVE, PAUSED"]
+  400 ["property discount_type should not exist"]   (no such field exists)
+  409 "Coupon already exists with this code"
+  401 / 403
+
+BUSINESS RULES / GOTCHAS
+  - start_date / end_date are NOT cross-validated. You can create a coupon whose
+    end_date is BEFORE its start_date and get no error; it will simply never be
+    usable. Validate the ordering in the dashboard.
+  - usage_limit: 0 is accepted and makes the coupon immediately unusable
+    (usage_count >= usage_limit). Enforce min 1 in the UI.
+  - A negative min_order_amount is accepted and behaves as "no minimum".
+  - `code` has no normalisation — "welcome10" and "WELCOME10" are two different
+    coupons, and a client applying the wrong case gets 404 "Coupon not found".
+    Uppercase the code in the dashboard before sending.
+
+================================================================================
+4.2  GET /coupon
+================================================================================
+Role: ADMIN. No params, no body.
+
+SUCCESS 200 — plain array (NOT paginated, NO filters)
+    {
+      "message": "Success",
+      "data": [
+        {
+          "id": 3,
+          "code": "EXPIRED15",
+          "discount_value": "15",
+          "min_order_amount": "300",
+          "start_date": "2026-09-08T00:00:00.000Z",
+          "end_date": "2026-10-01T00:00:00.000Z",
+          "usage_limit": 20,
+          "usage_count": 0,
+          "status": "ACTIVE",
+          "created_at": "2026-10-06T17:03:49.015Z"
+        },
+        {
+          "id": 1,
+          "code": "WELCOME10",
+          "discount_value": "10",
+          "min_order_amount": null,
+          "start_date": "2026-09-08T00:00:00.000Z",
+          "end_date": "2026-12-07T00:00:00.000Z",
+          "usage_limit": 100,
+          "usage_count": 4,
+          "status": "ACTIVE",
+          "created_at": "2026-10-06T17:03:49.001Z"
+        }
+      ]
+    }
+
+ORDERING: created_at DESC (newest first).
+No pagination, no search, no status filter — the dashboard must filter and
+paginate client-side. Note the first row above is an EXPIRED coupon whose
+status is still "ACTIVE" (end_date is in the past) — exactly the case §3
+describes.
+
+ERRORS
+  401 / 403
+
+================================================================================
+4.3  GET /coupon/:id
+================================================================================
+Role: ADMIN
+
+PATH PARAMS
+id | int | REQUIRED | parsed with unary + (non-numeric -> NaN -> 404)
+
+SUCCESS 200 — one coupon, same shape as a list element
+    {
+      "message": "Success",
+      "data": {
+        "id": 1,
+        "code": "WELCOME10",
+        "discount_value": "10",
+        "min_order_amount": null,
+        "start_date": "2026-09-08T00:00:00.000Z",
+        "end_date": "2026-12-07T00:00:00.000Z",
+        "usage_limit": 100,
+        "usage_count": 4,
+        "status": "ACTIVE",
+        "created_at": "2026-10-06T17:03:49.001Z"
+      }
+    }
+
+ERRORS
+  404 "Coupon not found"
+  401 / 403
+
+GOTCHA: the CouponUsage rows are NOT included, so you cannot see WHICH users
+redeemed the coupon — only the aggregate `usage_count`. No endpoint exposes the
+redemption list.
+
+================================================================================
+4.4  PATCH /coupon/:id
+================================================================================
+Role: ADMIN
+Content-Type: application/json
+All fields optional (PartialType of the create DTO).
+
+PATH PARAMS
+id | int | REQUIRED | parsed with unary +
+
+BODY — same field rules as create, all optional
+code             | string | optional | see gotcha below
+discount_value   | number | optional | min 1, max 100
+min_order_amount | number | optional |
+start_date       | string | optional | ISO-8601
+end_date         | string | optional | ISO-8601
+usage_limit      | int    | optional |
+status           | enum   | optional | "ACTIVE" or "PAUSED"
+
+REQUEST EXAMPLE — pause a coupon
+    { "status": "PAUSED" }
+
+SUCCESS 200 — the updated coupon, same shape as GET /coupon/:id
+    {
+      "message": "Success",
+      "data": {
+        "id": 1,
+        "code": "WELCOME10",
+        "discount_value": "15",
+        "min_order_amount": null,
+        "start_date": "2026-09-08T00:00:00.000Z",
+        "end_date": "2026-12-07T00:00:00.000Z",
+        "usage_limit": 100,
+        "usage_count": 4,
+        "status": "PAUSED",
+        "created_at": "2026-10-06T17:03:49.001Z"
+      }
+    }
+
+ERRORS
+  400 ["discount_value must not be greater than 100"]
+  400 ["status must be one of the following values: ACTIVE, PAUSED"]
+  404 "Coupon not found"
+  401 / 403
+  500  if you change `code` to one that already exists. The update path does
+       NOT pre-check code uniqueness (only create does), so the unique-index
+       violation escapes as an uncaught Prisma P2002 -> 500, NOT 409. Check
+       uniqueness in the dashboard before renaming a code.
+
+BUSINESS RULES / GOTCHAS
+  - PAUSING IS THE SAFE "DISABLE". Set status = "PAUSED" instead of deleting;
+    clients then get 409 "Coupon is paused or inactive" and all history is
+    preserved.
+  - `usage_count` is NOT in the DTO, so you cannot reset it. A user who has
+    already redeemed this coupon can never redeem it again, even after you
+    raise usage_limit.
+  - Editing discount_value changes the discount for carts that already have the
+    coupon attached (it is re-read live on every GET /cart), but orders already
+    placed keep their snapshotted discount_amount.
+  - Extending end_date into the future revives an expired coupon; it becomes
+    usable again immediately for users who have not redeemed it.
+
+================================================================================
+4.5  DELETE /coupon/:id
+================================================================================
+Role: ADMIN. No body. HARD DELETE.
+
+PATH PARAMS
+id | int | REQUIRED | parsed with unary +
+
+SUCCESS 200 — returns the DELETED row
+    {
+      "message": "Success",
+      "data": {
+        "id": 3,
+        "code": "EXPIRED15",
+        "discount_value": "15",
+        "min_order_amount": "300",
+        "start_date": "2026-09-08T00:00:00.000Z",
+        "end_date": "2026-10-01T00:00:00.000Z",
+        "usage_limit": 20,
+        "usage_count": 0,
+        "status": "ACTIVE",
+        "created_at": "2026-10-06T17:03:49.015Z"
+      }
+    }
+
+ERRORS
+  404 "Coupon not found"
+  401 / 403
+  500  LIKELY if the coupon has ever been used or is attached to a cart or an
+       order. Order.coupon_id and CouponUsage.coupon_id are plain required
+       relations with no cascade rule on the coupon side, so Prisma raises a
+       foreign-key violation (P2003) which is NOT caught here and surfaces as
+       500. ONLY DELETE COUPONS THAT HAVE NEVER BEEN REDEEMED. For anything
+       else, set status = "PAUSED".
+
+BUSINESS RULES
+  - >>> IRREVERSIBLE and the ONLY hard delete in the catalog area besides
+    >>> banners. The row is permanently removed; there is no restore.
+  - Cart.coupon_id is declared SetNull, so attached carts would be cleared, but
+    the Order / CouponUsage references are what block the delete in practice.
+  - Prefer PAUSED over DELETE in the UI; offer delete only for coupons with
+    usage_count === 0, and still expect a possible 500 if a cart references it.
+
+
+5. CHANGELOG vs THE OLD doc/ FOLDER
+--------------------------------------------------------------------------------
+CONFIRMED STILL ACCURATE
+- doc/coupon.txt's endpoint list, field rules (discount_value 1..100), the
+  percentage-only model, and the 404 "Coupon not found" message all still match
+  the code.
+- doc/AI_RULES.txt §13 (percentage only, one coupon per cart, live
+  revalidation, no consumption on apply, unique usage per user) is still
+  correct and is restated in §3.
+
+CORRECTED
+- The old examples showed `discount_value: 10` and `min_order_amount: 50` as
+  JSON NUMBERS in responses. They are actually returned as DECIMAL STRINGS
+  ("10", "50"). Requests still take numbers.
+- The old doc listed an `updated_at` field in every example response. Coupon has
+  NO updated_at column.
+- The create conflict message is "Coupon already exists with this code", not
+  the "Coupon code already exists" shown in the old doc.
+- Newly documented failure modes: PATCH to a duplicate `code` returns 500 (not
+  409), and DELETE of a redeemed coupon returns 500 (foreign-key violation).
+- Newly documented: there is no "EXPIRED" status, no way to reset usage_count,
+  and no endpoint that lists which users redeemed a coupon.

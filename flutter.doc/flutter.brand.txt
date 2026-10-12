@@ -1,0 +1,150 @@
+================================================================================
+FLUTTER — BRAND MODULE
+================================================================================
+
+1. MODULE
+--------------------------------------------------------------------------------
+Product brands (Lavazza, Nescafé, Debic, ...). A Brand is linked to many
+SubCategories through the BrandSubCategory join table and owns many Products.
+Brands use SOFT DELETE (deleted_at), so a removed brand simply stops appearing.
+Backed by src/brand/. Used by: the Home screen brands rail (which comes from
+GET /home — no extra call needed), and the Brand page header. The Brand page is
+the LAST level of the catalog drill-down; its product grid comes from
+GET /product?subcategory_id=&brand_id=.
+
+
+2. ENDPOINT SUMMARY
+--------------------------------------------------------------------------------
+METHOD | PATH          | ROLE          | PURPOSE
+-------|---------------|---------------|-------------------------------------
+GET    | /brand        | any logged-in | All non-deleted brands + their
+       |               |               | sub-category links
+GET    | /brand/:id    | any logged-in | One non-deleted brand + its
+       |               |               | sub-categories (with images)
+
+Both carry no @Roles decorator, so any authenticated user (CLIENT included)
+passes. A token is still required.
+
+
+3. ENDPOINTS
+--------------------------------------------------------------------------------
+
+================================================================================
+3.1  GET /brand
+================================================================================
+Role: any authenticated user. No params, no body.
+
+SUCCESS 200 — a plain array, no pagination
+    {
+      "message": "Success",
+      "data": [
+        {
+          "id": 3,
+          "name": "نسكافيه (Nescafé)",
+          "logo": "/uploads/brands/916a56bd-....jpg",
+          "created_at": "2026-10-06T17:03:46.849Z",
+          "updated_at": "2026-10-06T17:03:46.849Z",
+          "brandSubCategories": [
+            { "subCategory": { "id": 1, "name": "قهوة" } }
+          ]
+        },
+        {
+          "id": 1,
+          "name": "دي بيكر (Debic)",
+          "logo": "/uploads/brands/ca1f7d26-....png",
+          "created_at": "2026-10-06T17:03:46.840Z",
+          "updated_at": "2026-10-06T17:03:46.840Z",
+          "brandSubCategories": [
+            { "subCategory": { "id": 2, "name": "دقيق" } },
+            { "subCategory": { "id": 3, "name": "صوص" } }
+          ]
+        }
+      ]
+    }
+
+ORDERING: created_at DESC (newest brand first). There is no display_order
+column on Brand.
+FILTER: deleted_at = null.
+
+FIELD NOTES
+  logo                string, NOT NULL in the schema — always present, relative
+  brandSubCategories  array of wrappers, each ONLY { subCategory: {id, name} }.
+                      No link id, no brand_id/subcategory_id on this endpoint.
+                      Flatten with:
+                          links.map((l) => l["subCategory"]).toList()
+  No is_hidden column on Brand (only deleted_at).
+
+ERRORS
+  401 Unauthorized
+
+================================================================================
+3.2  GET /brand/:id
+================================================================================
+Role: any authenticated user
+
+PATH PARAMS
+id | int | REQUIRED | parsed with unary + (non-numeric becomes NaN -> 404)
+
+SUCCESS 200 — note the nested shape differs from GET /brand
+    {
+      "message": "Success",
+      "data": {
+        "id": 2,
+        "name": "لافازا (Lavazza)",
+        "logo": "/uploads/brands/8c11abb7-....png",
+        "created_at": "2026-10-06T17:03:46.845Z",
+        "updated_at": "2026-10-06T17:03:46.845Z",
+        "deleted_at": null,
+        "brandSubCategories": [
+          {
+            "id": 1,
+            "brand_id": 2,
+            "subcategory_id": 1,
+            "subCategory": {
+              "id": 1,
+              "name": "قهوة",
+              "image": "/uploads/sub-category/dd489d82-....jpeg"
+            }
+          }
+        ]
+      }
+    }
+
+SHAPE DIFFERENCES vs GET /brand (both are real, do not share a parser)
+  - This one includes deleted_at (always null, since deleted brands 404).
+  - brandSubCategories entries here carry id / brand_id / subcategory_id.
+  - subCategory here includes `image`; the list endpoint gives only id + name.
+
+ERRORS
+  404 "Brand not found"   (missing id OR deleted_at is set)
+  401 Unauthorized
+
+BUSINESS RULES / GOTCHAS
+  - Soft-deleted brands return 404. There is no way for the client to see them.
+  - brandSubCategories is NOT filtered by sub-category visibility. A brand can
+    list a sub-category that is hidden (or whose category is hidden), which
+    GET /sub-category/:id would 404 on. Do not blindly turn these into
+    navigable chips — verify, or drive navigation from the sub-category side
+    instead.
+  - brandSubCategories has no explicit orderBy; order is not guaranteed.
+  - Products are NOT included. Fetch them with
+    GET /product?brand_id=<id> (optionally also &subcategory_id=<id>).
+
+BRAND PAGE RECIPE (last catalog level)
+    GET /brand/:id                                      -> header (name + logo)
+    GET /product?subcategory_id=<subId>&brand_id=<id>   -> the product grid
+  If you arrived from the Home brands rail rather than a sub-category, drop
+  subcategory_id and just use ?brand_id=<id>.
+
+
+4. CHANGELOG vs THE OLD doc/ FOLDER
+--------------------------------------------------------------------------------
+CORRECTED
+- doc/brand.txt described "GET /brand (dashboard list)" as a second GET handler
+  on the same path and admitted it was effectively unreachable. That duplicate
+  is gone: the admin list is now GET /brand/admin (see
+  admin.doc/admin.brand.txt). Plain GET /brand is the client list.
+- Brand has no `display_order` and no `is_hidden` column — doc/AI_RULES.txt
+  listed both. Removal is via `deleted_at` (soft delete) only.
+- The old docs showed one brand shape for both endpoints. The list and detail
+  responses genuinely differ (see "SHAPE DIFFERENCES" above).

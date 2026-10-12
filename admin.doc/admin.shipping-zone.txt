@@ -1,0 +1,257 @@
+================================================================================
+ADMIN — SHIPPING ZONE MODULE
+================================================================================
+
+1. MODULE
+--------------------------------------------------------------------------------
+Delivery areas and their flat shipping cost. The client picks a zone at
+checkout; its cost is SNAPSHOTTED into the order's shipping_fee, so later price
+edits never change existing orders. There is NO DELETE ENDPOINT — zones are
+retired by setting is_active = false. Backed by src/shipping-zone/. Used by:
+the Shipping zones page.
+
+
+2. ENDPOINT SUMMARY
+--------------------------------------------------------------------------------
+METHOD | PATH                        | ROLE   | PURPOSE
+-------|-----------------------------|--------|---------------------------------
+POST   | /shipping-zone              | ADMIN  | Create a zone
+GET    | /shipping-zone/admin        | ADMIN  | List ALL (inactive included)
+GET    | /shipping-zone/admin/:id    | ADMIN  | Edit form (active or inactive)
+PATCH  | /shipping-zone/:id          | ADMIN  | Update
+GET    | /shipping-zone              | CLIENT | Client picker, ACTIVE only
+
+>>> THERE IS NO DELETE /shipping-zone/:id. To retire a zone, PATCH it with
+>>> is_active = false. It then disappears from the client picker while every
+>>> historical order keeps its snapshotted shipping_fee.
+
+'admin' and 'admin/:id' are declared before ':id' in the controller — correct.
+Note this controller uses string role literals, @Roles('ADMIN') /
+@Roles('CLIENT'), rather than the UserRole enum used elsewhere. Behaviour is
+identical (the enum values are the same strings).
+
+
+3. ENDPOINTS
+--------------------------------------------------------------------------------
+
+================================================================================
+3.1  GET /shipping-zone/admin
+================================================================================
+Role: ADMIN. No params, no body.
+
+SUCCESS 200 — plain array (NOT paginated), inactive rows INCLUDED, FULL rows
+    {
+      "message": "Success",
+      "data": [
+        {
+          "id": 1,
+          "name": "القاهرة",
+          "shipping_cost": "30",
+          "is_active": true,
+          "display_order": 0,
+          "created_at": "2026-10-08T19:18:39.301Z",
+          "updated_at": "2026-10-08T19:18:39.301Z"
+        },
+        {
+          "id": 2,
+          "name": "المنصورة",
+          "shipping_cost": "50",
+          "is_active": true,
+          "display_order": 1,
+          "created_at": "2026-10-08T19:18:39.310Z",
+          "updated_at": "2026-10-08T19:18:39.310Z"
+        },
+        {
+          "id": 5,
+          "name": "الساحل الشمالي",
+          "shipping_cost": "350",
+          "is_active": false,
+          "display_order": 9,
+          "created_at": "2026-10-08T19:20:00.000Z",
+          "updated_at": "2026-10-08T19:25:00.000Z"
+        }
+      ]
+    }
+
+>>> shipping_cost IS A DECIMAL STRING ("30"), not a number. Parse it.
+>>> (Inside an ORDER response, shippingZone.shipping_cost is converted to a
+>>> JSON number — the two differ. See admin.general.txt §10.)
+
+ORDERING: display_order ASC.
+NO FILTER — this is the whole point of the /admin route. Returns the full row
+including is_active and both timestamps, unlike the client route which selects
+only four fields.
+
+ERRORS
+  401 / 403
+
+================================================================================
+3.2  GET /shipping-zone/admin/:id
+================================================================================
+Role: ADMIN. Pre-fills the edit form. Works for active AND inactive zones.
+
+PATH PARAMS
+id | int | REQUIRED | must be a positive integer
+
+SUCCESS 200
+    {
+      "message": "Success",
+      "data": {
+        "id": 1,
+        "name": "القاهرة",
+        "shipping_cost": "30",
+        "is_active": true,
+        "display_order": 0,
+        "created_at": "2026-10-08T19:18:39.301Z",
+        "updated_at": "2026-10-08T19:18:39.301Z"
+      }
+    }
+
+ERRORS
+  400 "Invalid shipping zone id"   (non-numeric, zero or negative)
+  404 "Shipping zone not found"
+  401 / 403
+
+================================================================================
+3.3  POST /shipping-zone
+================================================================================
+Role: ADMIN
+Content-Type: application/json          <-- JSON, NOT multipart (no files here)
+
+BODY
+name          | string  | REQUIRED | any non-empty string (@IsString only — no
+                                     length rule). MUST BE UNIQUE.
+shipping_cost | number  | REQUIRED | min 0 (0 is allowed = free delivery)
+is_active     | boolean | optional | default true.
+                                     >>> MUST BE A REAL JSON BOOLEAN. This DTO
+                                     >>> has NO @Transform, so the strings
+                                     >>> "true"/"false" are REJECTED with
+                                     >>> ["is_active must be a boolean value"].
+                                     >>> Send true / false unquoted. (Every
+                                     >>> other module's boolean accepts the
+                                     >>> string form — this one does not.)
+display_order | int     | optional | integer, min 0, default 0
+
+REQUEST EXAMPLE
+    {
+      "name": "القاهرة",
+      "shipping_cost": 30,
+      "is_active": true,
+      "display_order": 0
+    }
+
+SUCCESS 201
+    {
+      "message": "Success",
+      "data": {
+        "id": 1,
+        "name": "القاهرة",
+        "shipping_cost": "30",
+        "is_active": true,
+        "display_order": 0,
+        "created_at": "2026-10-08T19:18:39.301Z",
+        "updated_at": "2026-10-08T19:18:39.301Z"
+      }
+    }
+
+  You SEND shipping_cost as a number and GET IT BACK as a Decimal string.
+
+ERRORS
+  400 ["shipping_cost must not be less than 0"]
+  400 ["shipping_cost must be a number conforming to the specified constraints"]
+  400 ["is_active must be a boolean value"]   (you sent "true" as a string)
+  400 ["display_order must not be less than 0"]
+  400 ["property foo should not exist"]
+  409 "Shipping zone name already exists"
+  401 / 403
+
+BUSINESS RULES / GOTCHAS
+  - `name` IS unique at the database level, and the service pre-checks it, so
+    you get a clean 409 rather than a 500.
+  - `name` has no minimum length — a single character or whitespace-only name
+    is accepted. Validate in the UI.
+  - shipping_cost = 0 is valid and means free delivery for that zone.
+  - The cost is FLAT per zone. It does not scale with cart weight, distance or
+    order total, and there is no free-shipping threshold anywhere in the code.
+
+================================================================================
+3.4  PATCH /shipping-zone/:id
+================================================================================
+Role: ADMIN
+Content-Type: application/json
+All fields optional (PartialType of the create DTO).
+
+PATH PARAMS
+id | int | REQUIRED | parsed with unary + (non-numeric -> NaN -> 404)
+
+BODY
+name          | string  | optional | unique if changed
+shipping_cost | number  | optional | min 0
+is_active     | boolean | optional | REAL JSON boolean only (see §3.3)
+display_order | int     | optional | integer, min 0
+
+REQUEST EXAMPLE — retire a zone (this is the "delete")
+    { "is_active": false }
+
+REQUEST EXAMPLE — change a price
+    { "shipping_cost": 45 }
+
+SUCCESS 200 — the updated row
+    {
+      "message": "Success",
+      "data": {
+        "id": 1,
+        "name": "القاهرة",
+        "shipping_cost": "45",
+        "is_active": true,
+        "display_order": 0,
+        "created_at": "2026-10-08T19:18:39.301Z",
+        "updated_at": "2026-10-09T08:40:12.004Z"
+      }
+    }
+
+ERRORS
+  400 ["shipping_cost must not be less than 0"]
+  400 ["is_active must be a boolean value"]
+  404 "Shipping zone not found"
+  409 "Shipping zone name already exists"   (pre-checked, and only when the new
+                                             name differs from the current one)
+  401 / 403
+
+BUSINESS RULES / GOTCHAS
+  - CHANGING shipping_cost DOES NOT AFFECT EXISTING ORDERS. Each order
+    snapshotted shipping_fee at creation time, so history is stable. It DOES
+    affect the next checkout immediately.
+  - DEACTIVATING A ZONE A CUSTOMER IS MID-CHECKOUT WITH makes POST /order fail
+    with 409 "Shipping zone does not exist or is inactive". The zone must be
+    is_active = true at the moment the order is placed.
+  - Deactivating does NOT touch historical orders — GET /order/admin still
+    joins and returns the (now inactive) zone with its current name and cost.
+  - The service passes the DTO straight through to Prisma
+    (`data: dto`). That is safe here because every DTO field is a real column,
+    but it means there is no explicit field mapping in this module — unlike the
+    rest of the codebase.
+  - There is no way to delete a zone. If you created one by mistake, rename it
+    and deactivate it.
+
+
+4. CHANGELOG vs THE OLD doc/ FOLDER
+--------------------------------------------------------------------------------
+NEW
+- GET /shipping-zone/admin/:id (edit form, returns inactive zones) did not
+  exist.
+
+CORRECTED
+- doc/shippingzone.txt and doc/flutter.shippingzone.txt mixed the client and
+  admin routes into one document. They are now split: the client has only
+  GET /shipping-zone (four selected fields, active only — see
+  flutter.doc/flutter.shipping-zone.txt), while the admin routes return full
+  rows including inactive ones.
+- shipping_cost is explicitly documented as a DECIMAL STRING in every
+  shipping-zone response, even though you send it as a number. Old examples
+  showed it as a number.
+- `is_active` on this module requires a REAL JSON boolean — the "true"/"false"
+  string form accepted everywhere else is rejected here, because this DTO has
+  no @Transform. Not previously documented.
+- Restated explicitly: there is NO delete endpoint. The old docs did not say so,
+  which left the dashboard team looking for one.
