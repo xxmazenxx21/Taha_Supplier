@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -10,6 +11,7 @@ import { join } from 'node:path';
 import { BannerActionType, Prisma } from '../../generated/prisma/client.js';
 import { PrismaService } from '../prisma/prisma.service';
 import { FindAllProductsDto } from '../product/dto/find-all-products.dto';
+import { AddBannerImagesDto } from './dto/add-banner-images.dto';
 import { BannerImageConfigDto } from './dto/banner-image-config.dto';
 import { CreateBannerDto } from './dto/create-banner.dto';
 import { UpdateBannerDto } from './dto/update-banner.dto';
@@ -168,6 +170,77 @@ export class BannerService {
       throw error;
     }
   }
+
+  // --- Dedicated endpoints for banner image management ---
+
+  /** Appends new images after the current highest sort_order. */
+  async addImages(id: number, dto: AddBannerImagesDto, imageUrls: string[]) {
+    const banner = await this.prisma.banner.findUnique({
+      where: { id },
+      select: { id: true },
+    });
+
+    if (!banner) {
+      await this.deleteLocalFiles(imageUrls);
+      throw new NotFoundException('Banner not found');
+    }
+
+    try {
+      const configs = this.parseImageConfigs(
+        dto.image_configs,
+        imageUrls.length,
+      );
+      const normalizedConfigs = await this.validateActionConfigs(configs);
+
+      const lastImage = await this.prisma.bannerImage.findFirst({
+        where: { banner_id: id },
+        orderBy: { sort_order: 'desc' },
+        select: { sort_order: true },
+      });
+      const startOrder = lastImage ? lastImage.sort_order + 1 : 0;
+
+      await this.prisma.bannerImage.createMany({
+        data: normalizedConfigs.map((config, index) => ({
+          banner_id: id,
+          ...this.toImageCreateData(config, imageUrls[index]),
+          sort_order: startOrder + index,
+        })),
+      });
+    } catch (error) {
+      await this.deleteLocalFiles(imageUrls);
+      throw error;
+    }
+
+    return this.findOne(id);
+  }
+
+  /** A banner must always keep at least one image. */
+  async removeImage(id: number, imageId: number) {
+    const image = await this.prisma.bannerImage.findFirst({
+      where: { id: imageId, banner_id: id },
+    });
+
+    if (!image) {
+      throw new NotFoundException('Banner image not found');
+    }
+
+    const remaining = await this.prisma.bannerImage.count({
+      where: { banner_id: id },
+    });
+
+    if (remaining <= 1) {
+      throw new ConflictException(
+        'A banner must keep at least one image. Delete the banner instead.',
+      );
+    }
+
+    await this.prisma.bannerImage.delete({ where: { id: imageId } });
+    await this.deleteLocalFiles([image.image_url]);
+
+    return this.findOne(id);
+  }
+
+  // --- End banner image management ---
 
   async remove(id: number) {
     const banner = await this.prisma.banner.findUnique({

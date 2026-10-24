@@ -5,7 +5,6 @@ import {
   Body,
   Patch,
   Param,
-  Delete,
   UseGuards,
 } from '@nestjs/common';
 import { CouponService } from './coupon.service';
@@ -42,11 +41,5 @@ export class CouponController {
   @Patch(':id')
   update(@Param('id') id: string, @Body() updateCouponDto: UpdateCouponDto) {
     return this.couponService.update(+id, updateCouponDto);
-  }
-
-  /** Hard delete coupon (admin only) */
-  @Delete(':id')
-  remove(@Param('id') id: string) {
-    return this.couponService.remove(+id);
   }
 }

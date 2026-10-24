@@ -20,6 +20,7 @@ import {
   UploadFolder,
 } from '../utils/multer/upload-paths';
 import { BannerService } from './banner.service';
+import { AddBannerImagesDto } from './dto/add-banner-images.dto';
 import { CreateBannerDto } from './dto/create-banner.dto';
 import { UpdateBannerDto } from './dto/update-banner.dto';
 
@@ -90,6 +91,45 @@ export class BannerController {
   remove(@Param('id', ParseIntPipe) id: number) {
     return this.bannerService.remove(id);
   }
+
+  // --- Dedicated endpoints for banner image management ---
+
+  @Post(':id/images')
+  @Roles(UserRole.ADMIN)
+  @UseInterceptors(
+    FilesInterceptor('images', 10, multerOptions(UploadFolder.BANNERS)),
+  )
+  async addImages(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: AddBannerImagesDto,
+    @UploadedFiles() files: Express.Multer.File[],
+  ) {
+    const uploadedFiles = files ?? [];
+    await this.validateUploadedFiles(uploadedFiles);
+
+    if (uploadedFiles.length === 0) {
+      throw new BadRequestException('No images provided');
+    }
+
+    return this.bannerService.addImages(
+      id,
+      dto,
+      uploadedFiles.map((file) =>
+        getUploadPublicPath(UploadFolder.BANNERS, file.filename),
+      ),
+    );
+  }
+
+  @Delete(':id/images/:imageId')
+  @Roles(UserRole.ADMIN)
+  removeImage(
+    @Param('id', ParseIntPipe) id: number,
+    @Param('imageId', ParseIntPipe) imageId: number,
+  ) {
+    return this.bannerService.removeImage(id, imageId);
+  }
+
+  // --- End banner image management ---
 
   private async validateUploadedFiles(
     files: Express.Multer.File[],

@@ -1,5 +1,13 @@
 import { Type } from 'class-transformer';
-import { IsInt, IsOptional, IsString, Min, IsIn } from 'class-validator';
+import {
+  IsInt,
+  IsNumber,
+  IsOptional,
+  IsString,
+  Max,
+  Min,
+  IsIn,
+} from 'class-validator';
 
 export class FindAllProductsDto {
   @IsOptional()
@@ -29,6 +37,9 @@ export class FindAllProductsDto {
 
   @IsOptional()
   @Type(() => Number)
+  @IsNumber()
+  @Min(1)
+  @Max(5)
   min_rating?: number;
 
   @IsOptional()

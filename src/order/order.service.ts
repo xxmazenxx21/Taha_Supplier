@@ -412,11 +412,17 @@ export class OrderService {
       user_id,
       from,
       to,
+      exclude_cancelled,
     } = query;
 
     const where: Prisma.OrderWhereInput = {};
 
     if (status) where.status = status;
+    if (exclude_cancelled && !status) {
+      where.status = {
+        notIn: [OrderStatus.CANCELLED, OrderStatus.CLIENTCANCELLED],
+      };
+    }
     if (payment_status) where.payment_status = payment_status;
     if (payment_method) where.payment_method = payment_method;
     if (user_id) where.user_id = user_id;
@@ -777,16 +783,23 @@ export class OrderService {
       },
     });
 
-    const devices = await this.prisma.userDevice.findMany({
-      where: { user_id: order.user_id },
-      select: { token: true },
-    });
+    // Committed — a push failure must not fail the request.
+    try {
+      const devices = await this.prisma.userDevice.findMany({
+        where: { user_id: order.user_id },
+        select: { token: true },
+      });
 
-    await this.notificationService.sendOrderStatusChangedNotification(
-      devices.map((device) => device.token),
-      updatedOrder.id,
-      updatedOrder.status,
-    );
+      await this.notificationService.sendOrderStatusChangedNotification(
+        devices.map((device) => device.token),
+        updatedOrder.id,
+        updatedOrder.status,
+      );
+    } catch (error) {
+      this.logger.error(
+        `Failed to send order-status notification for order ${updatedOrder.id}: ${this.getErrorMessage(error)}`,
+      );
+    }
 
     return this.formatOrderResponse(updatedOrder);
   }

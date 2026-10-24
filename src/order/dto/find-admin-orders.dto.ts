@@ -1,5 +1,6 @@
-import { Type } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 import {
+  IsBoolean,
   IsDateString,
   IsEnum,
   IsInt,
@@ -54,4 +55,12 @@ export class FindAdminOrdersDto {
   @IsOptional()
   @IsDateString()
   to?: string;
+
+  /**
+   * Hides CANCELLED and CLIENTCANCELLED orders. Ignored when `status` is sent.
+   */
+  @IsOptional()
+  @Transform(({ value }) => value === '1' || value === 'true' || value === true)
+  @IsBoolean()
+  exclude_cancelled?: boolean;
 }
