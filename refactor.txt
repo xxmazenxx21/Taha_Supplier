@@ -1,0 +1,165 @@
+ORDER MODULE REFACTOR — SUMMARY
+Date: 2026-11-10
+Scope: pure readability refactor of the order module. Zero behavior change.
+Same routes, same validation, same response shapes, same status codes,
+same error message strings. No Prisma schema change, no migration.
+Nothing committed.
+
+======================================================================
+1. WHAT CHANGED
+======================================================================
+
+NEW FILES
+---------
+src/prisma/serializable-transaction.ts
+  - runSerializableTransaction(prisma, fn, { maxRetries, maxWait, timeout }, onExhausted)
+  - isSerializationFailure(error)  (moved out of OrderService; P2034 check)
+  - Owns the retry loop. Retries ONLY on P2034, up to maxRetries attempts,
+    then throws onExhausted(). Transaction options: Serializable isolation,
+    maxWait 5000, timeout 10000 (passed in by OrderService, unchanged).
+
+src/utils/error-message.ts
+  - getErrorMessage(error): string  (shared by both order services)
+
+src/utils/multer/private-files.ts
+  - deletePrivateFile(relativePath, logger)
+  - Same best-effort delete as before; same two warn messages.
+
+src/order/order.mapper.ts
+  - formatOrderResponse(order)  pure function, identical output to the old
+    private method (Decimal -> Math.round(number) for money fields).
+
+src/order/order-admin.service.ts  (OrderAdminService)
+  - findAllOrders, findOneAdmin, findCancelledOrders, updateStatus,
+    updatePaymentStatus, getPaymentProofPath
+  - Repeated user { select: {...} } blocks consolidated into one
+    orderUserSelect constant (same fields).
+
+REWRITTEN
+---------
+src/order/order.service.ts  (OrderService — client side)
+  - create (+ checkout steps), findMyOrders, findMyOrder, cancel,
+    replacePaymentProof
+  - Checkout transaction body now reads top-to-bottom as step calls:
+      lockAndLoadCart(tx, userId)                -> steps 1-5, returns freshCart
+      assertItemsAvailable(cart)                 -> step 6
+      buildOrderItems(cart)                      -> step 7 { orderItems, subtotal }
+      lockActiveShippingZone(tx, zoneId)         -> step 8
+      consumeCoupon(tx, couponId, userId, sub)   -> step 9 { couponId, discountAmount }
+      createOrderRecord(tx, {...})               -> step 10
+      recordCouponUsage(tx, couponId, userId, id)-> step 11 (P2002 -> 409 kept)
+      clearCart(tx, cartId)                      -> step 12
+  - Every DB call inside the transaction uses `tx`.
+  - Lock order unchanged: Cart FOR UPDATE -> CartItem ORDER BY id FOR UPDATE
+    -> read + "Cart is empty"/"invalid quantity" checks -> Product IN (deduped,
+    sorted asc) ORDER BY id FOR UPDATE -> re-read cart (freshCart used from
+    here) -> availability -> items/subtotal -> ShippingZone FOR UPDATE ->
+    coupon re-validation + atomic usage_count UPDATE -> order.create ->
+    couponUsage.create -> cartItem.deleteMany + cart.update coupon_id=null.
+  - create() still: validates CARD/CASH proof before any transaction, deletes
+    the proof file on ANY checkout failure, wraps the post-commit push in
+    try/catch.
+  - Typed with Prisma.CartGetPayload / ShippingZoneGetPayload /
+    OrderItemUncheckedCreateWithoutOrderInput / OrderGetPayload. No `any`.
+
+src/order/order.module.ts
+  - providers: OrderService, OrderAdminService; imports CouponModule.
+
+src/coupon/coupon.module.ts
+  - exports: [CouponService]
+
+src/cart/cart.module.ts
+  - imports CouponModule.
+
+EDITED IN PLACE
+---------------
+src/coupon/coupon.service.ts
+  - Added getCouponIneligibilityReason(coupon, subtotal, alreadyUsed, now = new Date())
+    Pure (no DB). Single source of truth for coupon rules, in this order:
+      status !== ACTIVE                      -> 'Coupon is paused or inactive'
+      start_date && now < start_date         -> 'Coupon is not active yet'
+      end_date && now > end_date             -> 'Coupon has expired'
+      usage_limit !== null && count >= limit -> 'Coupon usage limit reached'
+      min_order_amount !== null && sub < min -> `Minimum order amount of ${min} not met`
+      alreadyUsed                            -> 'You have already used this coupon'
+  - Exported type CouponEligibilityFields.
+  - Existing methods untouched.
+
+src/cart/cart.service.ts
+  - validateCouponLive now does the couponUsage lookup, then calls
+    CouponService.getCouponIneligibilityReason. Still returns { valid, reason }.
+    'Coupon not found' stays in the cart.
+  - coupon param typed Coupon | null instead of any. Unused UserRole import removed.
+  - Everything else untouched.
+
+src/order/order.controller.ts
+  - Injects OrderAdminService alongside OrderService. Admin routes
+    (payment-status, payment-proof GET, admin/cancelled, admin, admin/:id,
+    PATCH :id) call the admin service. Decorators, paths, roles and
+    declaration order unchanged.
+
+======================================================================
+2. COUPON RULE DIFF (cart vs checkout, found BEFORE changing anything)
+======================================================================
+- Missing coupon: cart 'Coupon not found' vs checkout 'Coupon is no longer
+  available'. By design; stays with each caller.
+- status: cart compared to string 'ACTIVE', checkout to CouponStatus.ACTIVE.
+  Same runtime value. Shared fn uses the enum.
+- min_order_amount: cart used truthiness (`min && ...`), checkout used
+  `!== null`. Equivalent for a Prisma Decimal (object is always truthy, even
+  Decimal(0)). Shared fn uses `!== null`.
+- Rules 2-4 and 6: identical order and wording.
+
+======================================================================
+3. VERIFICATION
+======================================================================
+npx tsc --noEmit   -> exit 0 (before: exit 0)
+npm run lint       -> 43 errors / 9 warnings (before: 56 / 10).
+                      No errors in any touched file.
+npm run build      -> exit 0; dist/src/order/order-admin.service.js and
+                      dist/src/prisma/serializable-transaction.js emitted.
+
+Route map: booted node dist/src/main.js on the ORIGINAL code and on the
+REFACTOR, grepped the Nest "Mapped {...}" lines for /order and /cart, diffed.
+Result: IDENTICAL (17 routes, same order):
+
+  Mapped {/cart, GET}
+  Mapped {/cart/items, POST}
+  Mapped {/cart/items/:id, PATCH}
+  Mapped {/cart/items/:id, DELETE}
+  Mapped {/cart/apply-coupon, POST}
+  Mapped {/cart/remove-coupon, POST}
+  Mapped {/order, POST}
+  Mapped {/order, GET}
+  Mapped {/order/:id/cancel, PATCH}
+  Mapped {/order/:id/payment-proof, PATCH}
+  Mapped {/order/:id/payment-status, PATCH}
+  Mapped {/order/:id/payment-proof, GET}
+  Mapped {/order/admin/cancelled, GET}
+  Mapped {/order/admin, GET}
+  Mapped {/order/admin/:id, GET}
+  Mapped {/order/:id, GET}
+  Mapped {/order/:id, PATCH}
+
+Error messages: every *Exception('...') / reason: '...' string was extracted
+from the old and new sources, sorted and diffed.
+  order-before == order-after + shared coupon rules   -> IDENTICAL
+  cart-before  == cart-after                           -> IDENTICAL
+
+======================================================================
+4. OPEN POINTS / THINGS TO REVIEW
+======================================================================
+- Extra query in the invalid-coupon path: because the shared rule fn is pure
+  and takes `alreadyUsed: boolean`, both callers now run the couponUsage
+  lookup BEFORE the rules instead of after. Success path: same queries, same
+  order. Failure path: one extra indexed read that the old code skipped. No
+  response changes. Can be made lazy (() => Promise<boolean>) if wanted.
+- The final 409 'Checkout could not be completed because the cart changed
+  concurrently' is unreachable, exactly as before: the last P2034 is rethrown
+  as-is (500). Preserved on purpose; pre-existing bug.
+- getPaymentProofPath moved whole into OrderAdminService even though CLIENT
+  also uses that route. Splitting it in two seemed worse.
+- OrderAdminService does not use deletePrivateFile because no admin method
+  deletes files today. Nothing was added.
+- The stray blank line in src/banner/banner.service.ts was already
+  uncommitted before this work and was left untouched.

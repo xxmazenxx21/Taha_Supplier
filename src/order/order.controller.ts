@@ -25,6 +25,7 @@ import {
   PrivateUploadFolder,
 } from '../utils/multer/upload-paths';
 import { OrderService } from './order.service';
+import { OrderAdminService } from './order-admin.service';
 import { CreateOrderDto } from './dto/create-order.dto';
 import { UpdateOrderStatusDto } from './dto/update-order-status.dto';
 import { UpdatePaymentStatusDto } from './dto/update-payment-status.dto';
@@ -34,7 +35,10 @@ type AuthedRequest = Request & { user: { sub: number; role: string } };
 
 @Controller('order')
 export class OrderController {
-  constructor(private readonly orderService: OrderService) {}
+  constructor(
+    private readonly orderService: OrderService,
+    private readonly orderAdminService: OrderAdminService,
+  ) {}
 
   @Post()
   @Roles(UserRole.CLIENT)
@@ -99,7 +103,7 @@ export class OrderController {
     @Param('id') id: string,
     @Body() dto: UpdatePaymentStatusDto,
   ) {
-    return this.orderService.updatePaymentStatus(
+    return this.orderAdminService.updatePaymentStatus(
       this.parseId(id),
       dto.payment_status,
     );
@@ -114,7 +118,7 @@ export class OrderController {
     @Param('id') id: string,
     @Res() res: Response,
   ) {
-    const absolutePath = await this.orderService.getPaymentProofPath(
+    const absolutePath = await this.orderAdminService.getPaymentProofPath(
       req.user.sub,
       this.parseId(id),
       req.user.role === UserRole.ADMIN,
@@ -128,20 +132,20 @@ export class OrderController {
   @Get('admin/cancelled')
   @Roles(UserRole.ADMIN)
   findCancelledOrders() {
-    return this.orderService.findCancelledOrders();
+    return this.orderAdminService.findCancelledOrders();
   }
 
   @Get('admin')
   @Roles(UserRole.ADMIN)
   findAllOrders(@Query() query: FindAdminOrdersDto) {
-    return this.orderService.findAllOrders(query);
+    return this.orderAdminService.findAllOrders(query);
   }
 
   // Must stay declared after 'admin/cancelled' and before @Get(':id')
   @Get('admin/:id')
   @Roles(UserRole.ADMIN)
   findOneAdmin(@Param('id') id: string) {
-    return this.orderService.findOneAdmin(this.parseId(id));
+    return this.orderAdminService.findOneAdmin(this.parseId(id));
   }
 
   @Get(':id')
@@ -153,7 +157,7 @@ export class OrderController {
   @Patch(':id')
   @Roles(UserRole.ADMIN)
   updateStatus(@Param('id') id: string, @Body() dto: UpdateOrderStatusDto) {
-    return this.orderService.updateStatus(this.parseId(id), dto.status);
+    return this.orderAdminService.updateStatus(this.parseId(id), dto.status);
   }
 
   private toPaymentProofPath(file?: Express.Multer.File): string | undefined {

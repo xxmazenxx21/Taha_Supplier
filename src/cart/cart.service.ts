@@ -3,12 +3,16 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { UserRole, Prisma } from '../../generated/prisma/client.js';
+import { Coupon, Prisma } from '../../generated/prisma/client.js';
 import { PrismaService } from '../prisma/prisma.service';
+import { CouponService } from '../coupon/coupon.service';
 
 @Injectable()
 export class CartService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly couponService: CouponService,
+  ) {}
 
   async findOrCreateByUserId(userId: number) {
     const cart = await this.prisma.cart.findUnique({
@@ -97,39 +101,16 @@ export class CartService {
     return { deleted: true };
   }
 
+  /**
+   * Non-throwing coupon check for cart previews. The rules themselves live
+   * in CouponService so cart and checkout can never drift apart.
+   */
   private async validateCouponLive(
-    coupon: any,
+    coupon: Coupon | null,
     userId: number,
     subtotal: Prisma.Decimal,
   ): Promise<{ valid: boolean; reason: string | null }> {
     if (!coupon) return { valid: false, reason: 'Coupon not found' };
-
-    if (coupon.status !== 'ACTIVE') {
-      return { valid: false, reason: 'Coupon is paused or inactive' };
-    }
-
-    const now = new Date();
-    if (coupon.start_date && now < coupon.start_date) {
-      return { valid: false, reason: 'Coupon is not active yet' };
-    }
-
-    if (coupon.end_date && now > coupon.end_date) {
-      return { valid: false, reason: 'Coupon has expired' };
-    }
-
-    if (
-      coupon.usage_limit !== null &&
-      coupon.usage_count >= coupon.usage_limit
-    ) {
-      return { valid: false, reason: 'Coupon usage limit reached' };
-    }
-
-    if (coupon.min_order_amount && subtotal.lessThan(coupon.min_order_amount)) {
-      return {
-        valid: false,
-        reason: `Minimum order amount of ${coupon.min_order_amount.toString()} not met`,
-      };
-    }
 
     const usage = await this.prisma.couponUsage.findUnique({
       where: {
@@ -140,11 +121,13 @@ export class CartService {
       },
     });
 
-    if (usage) {
-      return { valid: false, reason: 'You have already used this coupon' };
-    }
+    const reason = this.couponService.getCouponIneligibilityReason(
+      coupon,
+      subtotal,
+      usage !== null,
+    );
 
-    return { valid: true, reason: null };
+    return { valid: reason === null, reason };
   }
 
   /**

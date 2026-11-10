@@ -6,11 +6,63 @@ import {
 import { CreateCouponDto } from './dto/create-coupon.dto';
 import { UpdateCouponDto } from './dto/update-coupon.dto';
 import { PrismaService } from '../prisma/prisma.service';
-import { Prisma } from '../../generated/prisma/client.js';
+import { Coupon, CouponStatus, Prisma } from '../../generated/prisma/client.js';
+
+/** The columns the eligibility rules look at. */
+export type CouponEligibilityFields = Pick<
+  Coupon,
+  | 'status'
+  | 'start_date'
+  | 'end_date'
+  | 'usage_limit'
+  | 'usage_count'
+  | 'min_order_amount'
+>;
 
 @Injectable()
 export class CouponService {
   constructor(private readonly prisma: PrismaService) {}
+
+  /**
+   * Single source of truth for "can this coupon be applied right now?".
+   * Shared by the cart (preview) and checkout (enforced inside the
+   * transaction). Pure: the caller performs the per-user usage lookup with
+   * its own client and passes the result as `alreadyUsed`.
+   *
+   * @returns the first failing rule's message, or null when eligible.
+   */
+  getCouponIneligibilityReason(
+    coupon: CouponEligibilityFields,
+    subtotal: Prisma.Decimal,
+    alreadyUsed: boolean,
+    now: Date = new Date(),
+  ): string | null {
+    if (coupon.status !== CouponStatus.ACTIVE) {
+      return 'Coupon is paused or inactive';
+    }
+    if (coupon.start_date && now < coupon.start_date) {
+      return 'Coupon is not active yet';
+    }
+    if (coupon.end_date && now > coupon.end_date) {
+      return 'Coupon has expired';
+    }
+    if (
+      coupon.usage_limit !== null &&
+      coupon.usage_count >= coupon.usage_limit
+    ) {
+      return 'Coupon usage limit reached';
+    }
+    if (
+      coupon.min_order_amount !== null &&
+      subtotal.lessThan(coupon.min_order_amount)
+    ) {
+      return `Minimum order amount of ${coupon.min_order_amount.toString()} not met`;
+    }
+    if (alreadyUsed) {
+      return 'You have already used this coupon';
+    }
+    return null;
+  }
 
   async create(createCouponDto: CreateCouponDto) {
     const existingCoupon = await this.prisma.coupon.findUnique({

@@ -5,20 +5,20 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common';
-import { promises as fs } from 'node:fs';
 import {
-  CouponStatus,
   OrderStatus,
   PaymentMethod,
   PaymentStatus,
   Prisma,
 } from '../../generated/prisma/client.js';
 import { PrismaService } from '../prisma/prisma.service';
+import { runSerializableTransaction } from '../prisma/serializable-transaction';
+import { CouponService } from '../coupon/coupon.service';
 import { NotificationService } from '../notification/notification.service';
-import { resolvePrivateUploadPath } from '../utils/multer/upload-paths';
+import { getErrorMessage } from '../utils/error-message';
+import { deletePrivateFile } from '../utils/multer/private-files';
 import { CreateOrderDto } from './dto/create-order.dto';
-import { PaymentStatusDecision } from './dto/update-payment-status.dto';
-import { FindAdminOrdersDto } from './dto/find-admin-orders.dto';
+import { formatOrderResponse } from './order.mapper';
 
 const MAX_SERIALIZATION_RETRIES = 3;
 const CLIENT_CANCELLATION_WINDOW_MS = 48 * 60 * 60 * 1000;
@@ -27,12 +27,25 @@ const CLIENT_CANCELLABLE_STATUSES: OrderStatus[] = [
   OrderStatus.CONFIRMED,
 ];
 
+const checkoutCartInclude = {
+  items: { include: { product: { include: { subCategory: true } } } },
+} satisfies Prisma.CartInclude;
+
+type CheckoutCart = Prisma.CartGetPayload<{
+  include: typeof checkoutCartInclude;
+}>;
+type CheckoutShippingZone = Prisma.ShippingZoneGetPayload<object>;
+type CheckoutOrderItem = Prisma.OrderItemUncheckedCreateWithoutOrderInput;
+type CreatedOrder = Prisma.OrderGetPayload<{ include: { items: true } }>;
+
+/** Client side of the order module: checkout and the customer's own orders. */
 @Injectable()
 export class OrderService {
   private readonly logger = new Logger(OrderService.name);
 
   constructor(
     private readonly prisma: PrismaService,
+    private readonly couponService: CouponService,
     private readonly notificationService: NotificationService,
   ) {}
 
@@ -49,19 +62,19 @@ export class OrderService {
     }
 
     if (dto.payment_method === PaymentMethod.CASH && paymentProofPath) {
-      await this.deletePrivateFile(paymentProofPath);
+      await deletePrivateFile(paymentProofPath, this.logger);
       throw new BadRequestException(
         'payment_proof is only accepted for card payments',
       );
     }
 
-    let order: Awaited<ReturnType<typeof this.runCheckout>>;
+    let order: CreatedOrder;
     try {
       order = await this.runCheckout(userId, dto, paymentProofPath);
     } catch (error) {
       // Covers validation, conflicts, and exhausted serialization retries.
       if (paymentProofPath) {
-        await this.deletePrivateFile(paymentProofPath);
+        await deletePrivateFile(paymentProofPath, this.logger);
       }
       throw error;
     }
@@ -79,299 +92,353 @@ export class OrderService {
       );
     } catch (error) {
       this.logger.error(
-        `Failed to send order-created notification for order ${order.id}: ${this.getErrorMessage(error)}`,
+        `Failed to send order-created notification for order ${order.id}: ${getErrorMessage(error)}`,
       );
     }
 
-    return this.formatOrderResponse(order);
+    return formatOrderResponse(order);
   }
 
-  private async runCheckout(
+  // ───────────────────────── checkout ─────────────────────────
+
+  private runCheckout(
     userId: number,
     dto: CreateOrderDto,
     paymentProofPath?: string,
-  ) {
-    for (let attempt = 0; attempt < MAX_SERIALIZATION_RETRIES; attempt += 1) {
-      try {
-        const order = await this.prisma.$transaction(
-          async (tx) => {
-            // Upsert also handles the first checkout for a user who has no cart yet.
-            // The explicit row lock prevents a concurrent cart mutation from being
-            // included in, or removed by, this checkout.
-            const cartRow = await tx.cart.upsert({
-              where: { user_id: userId },
-              update: {},
-              create: { user_id: userId },
-              select: { id: true },
-            });
-
-            await tx.$queryRaw`
-              SELECT "id"
-              FROM "Cart"
-              WHERE "id" = ${cartRow.id}
-              FOR UPDATE
-            `;
-
-            await tx.$queryRaw`
-              SELECT "id"
-              FROM "CartItem"
-              WHERE "cart_id" = ${cartRow.id}
-              ORDER BY "id"
-              FOR UPDATE
-            `;
-
-            const cart = await tx.cart.findUnique({
-              where: { id: cartRow.id },
-              include: {
-                items: {
-                  include: { product: { include: { subCategory: true } } },
-                },
-              },
-            });
-
-            if (!cart || cart.items.length === 0) {
-              throw new ConflictException('Cart is empty');
-            }
-
-            if (cart.items.some((item) => item.quantity <= 0)) {
-              throw new ConflictException('Cart contains an invalid quantity');
-            }
-
-            const productIds = [
-              ...new Set(cart.items.map((item) => item.product_id)),
-            ].sort((a, b) => a - b);
-
-            await tx.$queryRaw`
-              SELECT "id"
-              FROM "Product"
-              WHERE "id" IN (${Prisma.join(productIds)})
-              ORDER BY "id"
-              FOR UPDATE
-            `;
-
-            // Re-read after acquiring product locks so all product snapshots are
-            // taken from the same transaction state used for the order.
-            const freshCart = await tx.cart.findUnique({
-              where: { id: cartRow.id },
-              include: {
-                items: {
-                  include: { product: { include: { subCategory: true } } },
-                },
-              },
-            });
-
-            if (!freshCart || freshCart.items.length === 0) {
-              throw new ConflictException('Cart is empty');
-            }
-
-            for (const item of freshCart.items) {
-              if (
-                !item.product.is_available ||
-                item.product.subCategory.is_hidden
-              ) {
-                throw new ConflictException(
-                  `Product "${item.product.name}" is not available`,
-                );
-              }
-            }
-
-            let subtotal = new Prisma.Decimal(0);
-            const orderItems = freshCart.items.map((item) => {
-              const unitPrice = new Prisma.Decimal(
-                item.product.discount_price ?? item.product.price,
-              );
-              const totalPrice = unitPrice.mul(item.quantity);
-              subtotal = subtotal.add(totalPrice);
-
-              return {
-                product_id: item.product_id,
-                quantity: item.quantity,
-                unit_price: unitPrice,
-                total_price: totalPrice,
-                product_name: item.product.name,
-                product_unit: item.product.unit,
-              };
-            });
-
-            await tx.$queryRaw`
-              SELECT "id"
-              FROM "ShippingZone"
-              WHERE "id" = ${dto.shipping_zone_id}
-              FOR UPDATE
-            `;
-
-            const shippingZone = await tx.shippingZone.findUnique({
-              where: { id: dto.shipping_zone_id },
-            });
-
-            if (!shippingZone || !shippingZone.is_active) {
-              throw new ConflictException(
-                'Shipping zone does not exist or is inactive',
-              );
-            }
-
-            const shippingFee = new Prisma.Decimal(shippingZone.shipping_cost);
-            let discountAmount = new Prisma.Decimal(0);
-            let couponId: number | null = null;
-            let coupon: Awaited<ReturnType<typeof tx.coupon.findUnique>> = null;
-
-            if (freshCart.coupon_id !== null) {
-              coupon = await tx.coupon.findUnique({
-                where: { id: freshCart.coupon_id },
-              });
-
-              if (!coupon) {
-                throw new ConflictException('Coupon is no longer available');
-              }
-
-              const now = new Date();
-              if (coupon.status !== CouponStatus.ACTIVE) {
-                throw new ConflictException('Coupon is paused or inactive');
-              }
-              if (coupon.start_date && now < coupon.start_date) {
-                throw new ConflictException('Coupon is not active yet');
-              }
-              if (coupon.end_date && now > coupon.end_date) {
-                throw new ConflictException('Coupon has expired');
-              }
-              if (
-                coupon.usage_limit !== null &&
-                coupon.usage_count >= coupon.usage_limit
-              ) {
-                throw new ConflictException('Coupon usage limit reached');
-              }
-              if (
-                coupon.min_order_amount !== null &&
-                subtotal.lessThan(coupon.min_order_amount)
-              ) {
-                throw new ConflictException(
-                  `Minimum order amount of ${coupon.min_order_amount.toString()} not met`,
-                );
-              }
-
-              const existingUsage = await tx.couponUsage.findUnique({
-                where: {
-                  coupon_id_user_id: {
-                    coupon_id: coupon.id,
-                    user_id: userId,
-                  },
-                },
-              });
-
-              if (existingUsage) {
-                throw new ConflictException(
-                  'You have already used this coupon',
-                );
-              }
-
-              // Prisma cannot express a comparison between two columns in a
-              // normal updateMany filter, so keep this conditional update
-              // parameterized and inside the same transaction.
-              const consumed = await tx.$executeRaw`
-                UPDATE "Coupon"
-                SET "usage_count" = "usage_count" + 1
-                WHERE "id" = ${coupon.id}
-                  AND (
-                    "usage_limit" IS NULL
-                    OR "usage_count" < "usage_limit"
-                  )
-              `;
-
-              if (consumed !== 1) {
-                throw new ConflictException(
-                  'Coupon usage limit was reached during checkout',
-                );
-              }
-
-              couponId = coupon.id;
-              discountAmount = subtotal.mul(
-                new Prisma.Decimal(coupon.discount_value).div(100),
-              );
-            }
-
-            const totalAmount = subtotal.sub(discountAmount).add(shippingFee);
-
-            const order = await tx.order.create({
-              data: {
-                user_id: userId,
-                coupon_id: couponId,
-                shipping_zone_id: shippingZone.id,
-                payment_method: dto.payment_method,
-                payment_proof_image:
-                  dto.payment_method === PaymentMethod.CARD
-                    ? paymentProofPath
-                    : null,
-                subtotal,
-                discount_amount: discountAmount,
-                shipping_fee: shippingFee,
-                total_amount: totalAmount,
-                delivery_address: dto.delivery_address,
-                delivery_lat: dto.delivery_lat,
-                delivery_lng: dto.delivery_lng,
-                delivery_notes: dto.delivery_notes,
-                items: { create: orderItems },
-              },
-              include: { items: true },
-            });
-
-            if (couponId !== null) {
-              try {
-                // Coupon usage is permanent after a successfully committed
-                // order. A future cancellation flow must not restore it
-                // unless the business policy is explicitly changed.
-                await tx.couponUsage.create({
-                  data: {
-                    coupon_id: couponId,
-                    user_id: userId,
-                    order_id: order.id,
-                  },
-                });
-              } catch (error) {
-                if (
-                  error instanceof Prisma.PrismaClientKnownRequestError &&
-                  error.code === 'P2002'
-                ) {
-                  throw new ConflictException(
-                    'You have already used this coupon',
-                  );
-                }
-                throw error;
-              }
-            }
-
-            await tx.cartItem.deleteMany({
-              where: { cart_id: freshCart.id },
-            });
-            await tx.cart.update({
-              where: { id: freshCart.id },
-              data: { coupon_id: null },
-            });
-
-            return order;
-          },
-          {
-            isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
-            maxWait: 5000,
-            timeout: 10000,
-          },
-        );
-
-        return order;
-      } catch (error) {
-        if (
-          this.isSerializationFailure(error) &&
-          attempt < MAX_SERIALIZATION_RETRIES - 1
-        ) {
-          continue;
-        }
-        throw error;
-      }
-    }
-
-    throw new ConflictException(
-      'Checkout could not be completed because the cart changed concurrently',
+  ): Promise<CreatedOrder> {
+    return runSerializableTransaction(
+      this.prisma,
+      (tx) => this.checkout(tx, userId, dto, paymentProofPath),
+      { maxRetries: MAX_SERIALIZATION_RETRIES, maxWait: 5000, timeout: 10000 },
+      () =>
+        new ConflictException(
+          'Checkout could not be completed because the cart changed concurrently',
+        ),
     );
   }
+
+  /**
+   * One checkout attempt. Lock order matters for serializable correctness:
+   * cart → cart items → products → shipping zone → coupon.
+   */
+  private async checkout(
+    tx: Prisma.TransactionClient,
+    userId: number,
+    dto: CreateOrderDto,
+    paymentProofPath?: string,
+  ): Promise<CreatedOrder> {
+    const cart = await this.lockAndLoadCart(tx, userId);
+    this.assertItemsAvailable(cart);
+    const { orderItems, subtotal } = this.buildOrderItems(cart);
+
+    const shippingZone = await this.lockActiveShippingZone(
+      tx,
+      dto.shipping_zone_id,
+    );
+    const shippingFee = new Prisma.Decimal(shippingZone.shipping_cost);
+
+    const { couponId, discountAmount } = await this.consumeCoupon(
+      tx,
+      cart.coupon_id,
+      userId,
+      subtotal,
+    );
+
+    const order = await this.createOrderRecord(tx, {
+      userId,
+      dto,
+      paymentProofPath,
+      shippingZoneId: shippingZone.id,
+      couponId,
+      orderItems,
+      subtotal,
+      discountAmount,
+      shippingFee,
+    });
+
+    if (couponId !== null) {
+      await this.recordCouponUsage(tx, couponId, userId, order.id);
+    }
+
+    await this.clearCart(tx, cart.id);
+
+    return order;
+  }
+
+  /**
+   * Steps 1-5: lock the cart row, its items and every product in it, then
+   * re-read the cart so all product snapshots come from the locked state.
+   */
+  private async lockAndLoadCart(
+    tx: Prisma.TransactionClient,
+    userId: number,
+  ): Promise<CheckoutCart> {
+    // Upsert also handles the first checkout for a user who has no cart yet.
+    // The explicit row lock prevents a concurrent cart mutation from being
+    // included in, or removed by, this checkout.
+    const cartRow = await tx.cart.upsert({
+      where: { user_id: userId },
+      update: {},
+      create: { user_id: userId },
+      select: { id: true },
+    });
+
+    await tx.$queryRaw`
+      SELECT "id"
+      FROM "Cart"
+      WHERE "id" = ${cartRow.id}
+      FOR UPDATE
+    `;
+
+    await tx.$queryRaw`
+      SELECT "id"
+      FROM "CartItem"
+      WHERE "cart_id" = ${cartRow.id}
+      ORDER BY "id"
+      FOR UPDATE
+    `;
+
+    const cart = await tx.cart.findUnique({
+      where: { id: cartRow.id },
+      include: checkoutCartInclude,
+    });
+
+    if (!cart || cart.items.length === 0) {
+      throw new ConflictException('Cart is empty');
+    }
+
+    if (cart.items.some((item) => item.quantity <= 0)) {
+      throw new ConflictException('Cart contains an invalid quantity');
+    }
+
+    const productIds = [
+      ...new Set(cart.items.map((item) => item.product_id)),
+    ].sort((a, b) => a - b);
+
+    await tx.$queryRaw`
+      SELECT "id"
+      FROM "Product"
+      WHERE "id" IN (${Prisma.join(productIds)})
+      ORDER BY "id"
+      FOR UPDATE
+    `;
+
+    // Re-read after acquiring product locks so all product snapshots are
+    // taken from the same transaction state used for the order.
+    const freshCart = await tx.cart.findUnique({
+      where: { id: cartRow.id },
+      include: checkoutCartInclude,
+    });
+
+    if (!freshCart || freshCart.items.length === 0) {
+      throw new ConflictException('Cart is empty');
+    }
+
+    return freshCart;
+  }
+
+  /** Step 6. */
+  private assertItemsAvailable(cart: CheckoutCart): void {
+    for (const item of cart.items) {
+      if (!item.product.is_available || item.product.subCategory.is_hidden) {
+        throw new ConflictException(
+          `Product "${item.product.name}" is not available`,
+        );
+      }
+    }
+  }
+
+  /** Step 7: snapshot prices and names; unit price prefers discount_price. */
+  private buildOrderItems(cart: CheckoutCart): {
+    orderItems: CheckoutOrderItem[];
+    subtotal: Prisma.Decimal;
+  } {
+    let subtotal = new Prisma.Decimal(0);
+    const orderItems = cart.items.map((item): CheckoutOrderItem => {
+      const unitPrice = new Prisma.Decimal(
+        item.product.discount_price ?? item.product.price,
+      );
+      const totalPrice = unitPrice.mul(item.quantity);
+      subtotal = subtotal.add(totalPrice);
+
+      return {
+        product_id: item.product_id,
+        quantity: item.quantity,
+        unit_price: unitPrice,
+        total_price: totalPrice,
+        product_name: item.product.name,
+        product_unit: item.product.unit,
+      };
+    });
+
+    return { orderItems, subtotal };
+  }
+
+  /** Step 8. */
+  private async lockActiveShippingZone(
+    tx: Prisma.TransactionClient,
+    shippingZoneId: number,
+  ): Promise<CheckoutShippingZone> {
+    await tx.$queryRaw`
+      SELECT "id"
+      FROM "ShippingZone"
+      WHERE "id" = ${shippingZoneId}
+      FOR UPDATE
+    `;
+
+    const shippingZone = await tx.shippingZone.findUnique({
+      where: { id: shippingZoneId },
+    });
+
+    if (!shippingZone || !shippingZone.is_active) {
+      throw new ConflictException(
+        'Shipping zone does not exist or is inactive',
+      );
+    }
+
+    return shippingZone;
+  }
+
+  /**
+   * Step 9: re-validate the coupon on the cart, then atomically take one
+   * usage. Returns a zero discount when the cart has no coupon.
+   */
+  private async consumeCoupon(
+    tx: Prisma.TransactionClient,
+    cartCouponId: number | null,
+    userId: number,
+    subtotal: Prisma.Decimal,
+  ): Promise<{ couponId: number | null; discountAmount: Prisma.Decimal }> {
+    if (cartCouponId === null) {
+      return { couponId: null, discountAmount: new Prisma.Decimal(0) };
+    }
+
+    const coupon = await tx.coupon.findUnique({ where: { id: cartCouponId } });
+
+    if (!coupon) {
+      throw new ConflictException('Coupon is no longer available');
+    }
+
+    const existingUsage = await tx.couponUsage.findUnique({
+      where: {
+        coupon_id_user_id: { coupon_id: coupon.id, user_id: userId },
+      },
+    });
+
+    const ineligibilityReason = this.couponService.getCouponIneligibilityReason(
+      coupon,
+      subtotal,
+      existingUsage !== null,
+    );
+    if (ineligibilityReason) {
+      throw new ConflictException(ineligibilityReason);
+    }
+
+    // Prisma cannot express a comparison between two columns in a
+    // normal updateMany filter, so keep this conditional update
+    // parameterized and inside the same transaction.
+    const consumed = await tx.$executeRaw`
+      UPDATE "Coupon"
+      SET "usage_count" = "usage_count" + 1
+      WHERE "id" = ${coupon.id}
+        AND (
+          "usage_limit" IS NULL
+          OR "usage_count" < "usage_limit"
+        )
+    `;
+
+    if (consumed !== 1) {
+      throw new ConflictException(
+        'Coupon usage limit was reached during checkout',
+      );
+    }
+
+    return {
+      couponId: coupon.id,
+      discountAmount: subtotal.mul(
+        new Prisma.Decimal(coupon.discount_value).div(100),
+      ),
+    };
+  }
+
+  /** Step 10. */
+  private createOrderRecord(
+    tx: Prisma.TransactionClient,
+    input: {
+      userId: number;
+      dto: CreateOrderDto;
+      paymentProofPath?: string;
+      shippingZoneId: number;
+      couponId: number | null;
+      orderItems: CheckoutOrderItem[];
+      subtotal: Prisma.Decimal;
+      discountAmount: Prisma.Decimal;
+      shippingFee: Prisma.Decimal;
+    },
+  ): Promise<CreatedOrder> {
+    const { dto, subtotal, discountAmount, shippingFee } = input;
+    const totalAmount = subtotal.sub(discountAmount).add(shippingFee);
+
+    return tx.order.create({
+      data: {
+        user_id: input.userId,
+        coupon_id: input.couponId,
+        shipping_zone_id: input.shippingZoneId,
+        payment_method: dto.payment_method,
+        payment_proof_image:
+          dto.payment_method === PaymentMethod.CARD
+            ? input.paymentProofPath
+            : null,
+        subtotal,
+        discount_amount: discountAmount,
+        shipping_fee: shippingFee,
+        total_amount: totalAmount,
+        delivery_address: dto.delivery_address,
+        delivery_lat: dto.delivery_lat,
+        delivery_lng: dto.delivery_lng,
+        delivery_notes: dto.delivery_notes,
+        items: { create: input.orderItems },
+      },
+      include: { items: true },
+    });
+  }
+
+  /**
+   * Step 11. Coupon usage is permanent after a successfully committed order.
+   * A future cancellation flow must not restore it unless the business policy
+   * is explicitly changed.
+   */
+  private async recordCouponUsage(
+    tx: Prisma.TransactionClient,
+    couponId: number,
+    userId: number,
+    orderId: number,
+  ): Promise<void> {
+    try {
+      await tx.couponUsage.create({
+        data: { coupon_id: couponId, user_id: userId, order_id: orderId },
+      });
+    } catch (error) {
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === 'P2002'
+      ) {
+        throw new ConflictException('You have already used this coupon');
+      }
+      throw error;
+    }
+  }
+
+  /** Step 12. */
+  private async clearCart(
+    tx: Prisma.TransactionClient,
+    cartId: number,
+  ): Promise<void> {
+    await tx.cartItem.deleteMany({ where: { cart_id: cartId } });
+    await tx.cart.update({ where: { id: cartId }, data: { coupon_id: null } });
+  }
+
+  // ───────────────────────── my orders ─────────────────────────
 
   async findMyOrders(userId: number) {
     const orders = await this.prisma.order.findMany({
@@ -383,7 +450,7 @@ export class OrderService {
       },
     });
 
-    return orders.map((order) => this.formatOrderResponse(order));
+    return orders.map((order) => formatOrderResponse(order));
   }
 
   async findMyOrder(userId: number, orderId: number) {
@@ -399,144 +466,7 @@ export class OrderService {
       throw new NotFoundException('Order not found');
     }
 
-    return this.formatOrderResponse(order);
-  }
-
-  async findAllOrders(query: FindAdminOrdersDto = {}) {
-    const {
-      page = 1,
-      per_page = 20,
-      status,
-      payment_status,
-      payment_method,
-      user_id,
-      from,
-      to,
-      exclude_cancelled,
-    } = query;
-
-    const where: Prisma.OrderWhereInput = {};
-
-    if (status) where.status = status;
-    if (exclude_cancelled && !status) {
-      where.status = {
-        notIn: [OrderStatus.CANCELLED, OrderStatus.CLIENTCANCELLED],
-      };
-    }
-    if (payment_status) where.payment_status = payment_status;
-    if (payment_method) where.payment_method = payment_method;
-    if (user_id) where.user_id = user_id;
-    if (from || to) {
-      where.created_at = {
-        ...(from && { gte: new Date(from) }),
-        ...(to && { lte: new Date(to) }),
-      };
-    }
-
-    const skip = (page - 1) * per_page;
-
-    // count() and findMany() share the same `where` reference.
-    const [total, orders] = await Promise.all([
-      this.prisma.order.count({ where }),
-      this.prisma.order.findMany({
-        where,
-        orderBy: { created_at: 'desc' },
-        skip,
-        take: per_page,
-        include: {
-          items: true,
-          shippingZone: true,
-          user: {
-            select: {
-              id: true,
-              name: true,
-              shop_name: true,
-              phone: true,
-              email: true,
-              address: true,
-            },
-          },
-        },
-      }),
-    ]);
-
-    const last_page = Math.ceil(total / per_page) || 1;
-    const next_page = page < last_page ? page + 1 : null;
-
-    return {
-      items: orders.map((order) => this.formatOrderResponse(order)),
-      page,
-      per_page,
-      next_page,
-      last_page,
-      total,
-    };
-  }
-
-  /** Admin detail view: everything needed to review a single order. */
-  async findOneAdmin(orderId: number) {
-    const order = await this.prisma.order.findUnique({
-      where: { id: orderId },
-      include: {
-        items: true,
-        shippingZone: true,
-        user: {
-          select: {
-            id: true,
-            name: true,
-            shop_name: true,
-            phone: true,
-            email: true,
-            address: true,
-            status: true,
-          },
-        },
-        coupon: { select: { id: true, code: true, discount_value: true } },
-      },
-    });
-
-    if (!order) {
-      throw new NotFoundException('Order not found');
-    }
-
-    return {
-      ...this.formatOrderResponse(order),
-      // discount_value is a Decimal; surface it as a number like other money.
-      coupon: order.coupon
-        ? {
-            id: order.coupon.id,
-            code: order.coupon.code,
-            discount_value: Number(order.coupon.discount_value),
-          }
-        : null,
-    };
-  }
-
-  async findCancelledOrders() {
-    const orders = await this.prisma.order.findMany({
-      where: {
-        status: {
-          in: [OrderStatus.CANCELLED, OrderStatus.CLIENTCANCELLED],
-        },
-      },
-      orderBy: { created_at: 'desc' },
-      include: {
-        items: true,
-        shippingZone: true,
-        user: {
-          select: {
-            id: true,
-            name: true,
-            shop_name: true,
-            phone: true,
-            email: true,
-            address: true,
-          },
-        },
-      },
-    });
-
-    return orders.map((order) => this.formatOrderResponse(order));
+    return formatOrderResponse(order);
   }
 
   /**
@@ -561,12 +491,12 @@ export class OrderService {
     });
 
     if (!order || order.user_id !== userId) {
-      await this.deletePrivateFile(paymentProofPath);
+      await deletePrivateFile(paymentProofPath, this.logger);
       throw new NotFoundException('Order not found');
     }
 
     if (order.payment_method !== PaymentMethod.CARD) {
-      await this.deletePrivateFile(paymentProofPath);
+      await deletePrivateFile(paymentProofPath, this.logger);
       throw new ConflictException('Only card orders accept a payment proof');
     }
 
@@ -574,14 +504,14 @@ export class OrderService {
       order.status === OrderStatus.CANCELLED ||
       order.status === OrderStatus.CLIENTCANCELLED
     ) {
-      await this.deletePrivateFile(paymentProofPath);
+      await deletePrivateFile(paymentProofPath, this.logger);
       throw new ConflictException(
         'A cancelled order cannot accept a new payment proof',
       );
     }
 
     if (order.payment_status !== PaymentStatus.REJECTED) {
-      await this.deletePrivateFile(paymentProofPath);
+      await deletePrivateFile(paymentProofPath, this.logger);
       throw new ConflictException(
         'A new payment proof can only be uploaded after the previous one was rejected',
       );
@@ -597,119 +527,16 @@ export class OrderService {
         include: { items: true, shippingZone: true },
       })
       .catch(async (error: unknown) => {
-        await this.deletePrivateFile(paymentProofPath);
+        await deletePrivateFile(paymentProofPath, this.logger);
         throw error;
       });
 
     // Only once the new path is committed is the old file safe to remove.
     if (order.payment_proof_image) {
-      await this.deletePrivateFile(order.payment_proof_image);
+      await deletePrivateFile(order.payment_proof_image, this.logger);
     }
 
-    return this.formatOrderResponse(updatedOrder);
-  }
-
-  async updatePaymentStatus(
-    orderId: number,
-    paymentStatus: PaymentStatusDecision,
-  ) {
-    const order = await this.prisma.order.findUnique({
-      where: { id: orderId },
-      select: {
-        id: true,
-        user_id: true,
-        payment_method: true,
-        payment_proof_image: true,
-      },
-    });
-
-    if (!order) {
-      throw new NotFoundException('Order not found');
-    }
-
-    if (
-      order.payment_method !== PaymentMethod.CARD ||
-      !order.payment_proof_image
-    ) {
-      throw new ConflictException(
-        'Only card orders with an uploaded payment proof can be reviewed',
-      );
-    }
-
-    const updatedOrder = await this.prisma.order.update({
-      where: { id: orderId },
-      data: { payment_status: paymentStatus },
-      include: {
-        items: true,
-        shippingZone: true,
-        user: {
-          select: {
-            id: true,
-            name: true,
-            shop_name: true,
-            phone: true,
-            email: true,
-            address: true,
-          },
-        },
-      },
-    });
-
-    // Committed — a push failure must not fail the request.
-    try {
-      const devices = await this.prisma.userDevice.findMany({
-        where: { user_id: order.user_id },
-        select: { token: true },
-      });
-
-      await this.notificationService.sendPaymentStatusUpdatedNotification(
-        devices.map((device) => device.token),
-        updatedOrder.id,
-        updatedOrder.payment_status,
-      );
-    } catch (error) {
-      this.logger.error(
-        `Failed to send payment-status notification for order ${updatedOrder.id}: ${this.getErrorMessage(error)}`,
-      );
-    }
-
-    return this.formatOrderResponse(updatedOrder);
-  }
-
-  /**
-   * Resolves the receipt to an absolute path for streaming.
-   * `isAdmin` skips the ownership check; otherwise the order must belong to userId.
-   */
-  async getPaymentProofPath(
-    userId: number,
-    orderId: number,
-    isAdmin: boolean,
-  ): Promise<string> {
-    const order = await this.prisma.order.findUnique({
-      where: { id: orderId },
-      select: { id: true, user_id: true, payment_proof_image: true },
-    });
-
-    if (!order || (!isAdmin && order.user_id !== userId)) {
-      throw new NotFoundException('Order not found');
-    }
-
-    if (!order.payment_proof_image) {
-      throw new NotFoundException('Payment proof not found');
-    }
-
-    const absolutePath = resolvePrivateUploadPath(order.payment_proof_image);
-    if (!absolutePath) {
-      throw new NotFoundException('Payment proof not found');
-    }
-
-    try {
-      await fs.access(absolutePath);
-    } catch {
-      throw new NotFoundException('Payment proof not found');
-    }
-
-    return absolutePath;
+    return formatOrderResponse(updatedOrder);
   }
 
   async cancel(userId: number, orderId: number) {
@@ -751,129 +578,6 @@ export class OrderService {
       },
     });
 
-    return this.formatOrderResponse(cancelledOrder);
-  }
-
-  async updateStatus(orderId: number, status: OrderStatus) {
-    const order = await this.prisma.order.findUnique({
-      where: { id: orderId },
-      select: { id: true, user_id: true },
-    });
-
-    if (!order) {
-      throw new NotFoundException('Order not found');
-    }
-
-    const updatedOrder = await this.prisma.order.update({
-      where: { id: orderId },
-      data: { status },
-      include: {
-        items: true,
-        shippingZone: true,
-        user: {
-          select: {
-            id: true,
-            name: true,
-            shop_name: true,
-            phone: true,
-            email: true,
-            address: true,
-          },
-        },
-      },
-    });
-
-    // Committed — a push failure must not fail the request.
-    try {
-      const devices = await this.prisma.userDevice.findMany({
-        where: { user_id: order.user_id },
-        select: { token: true },
-      });
-
-      await this.notificationService.sendOrderStatusChangedNotification(
-        devices.map((device) => device.token),
-        updatedOrder.id,
-        updatedOrder.status,
-      );
-    } catch (error) {
-      this.logger.error(
-        `Failed to send order-status notification for order ${updatedOrder.id}: ${this.getErrorMessage(error)}`,
-      );
-    }
-
-    return this.formatOrderResponse(updatedOrder);
-  }
-
-  /**
-   * Best-effort removal of a private upload. A missing or unresolvable file
-   * must never turn into a request failure.
-   */
-  private async deletePrivateFile(relativePath: string): Promise<void> {
-    const absolutePath = resolvePrivateUploadPath(relativePath);
-    if (!absolutePath) {
-      this.logger.warn(
-        `Refusing to delete payment proof outside private-uploads: ${relativePath}`,
-      );
-      return;
-    }
-
-    try {
-      await fs.unlink(absolutePath);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-        this.logger.warn(
-          `Could not delete payment proof ${relativePath}: ${this.getErrorMessage(error)}`,
-        );
-      }
-    }
-  }
-
-  private getErrorMessage(error: unknown): string {
-    return error instanceof Error ? error.message : String(error);
-  }
-
-  private isSerializationFailure(error: unknown): boolean {
-    return (
-      error instanceof Prisma.PrismaClientKnownRequestError &&
-      error.code === 'P2034'
-    );
-  }
-
-  private formatOrderResponse(order: {
-    subtotal: Prisma.Decimal;
-    discount_amount: Prisma.Decimal;
-    shipping_fee: Prisma.Decimal;
-    total_amount: Prisma.Decimal;
-    items: Array<{
-      unit_price: Prisma.Decimal;
-      total_price: Prisma.Decimal;
-      [key: string]: unknown;
-    }>;
-    shippingZone?: {
-      shipping_cost: Prisma.Decimal;
-      [key: string]: unknown;
-    };
-    [key: string]: unknown;
-  }) {
-    return {
-      ...order,
-      subtotal: Math.round(order.subtotal.toNumber()),
-      discount_amount: Math.round(order.discount_amount.toNumber()),
-      shipping_fee: Math.round(order.shipping_fee.toNumber()),
-      total_amount: Math.round(order.total_amount.toNumber()),
-      items: order.items.map((item) => ({
-        ...item,
-        unit_price: Math.round(item.unit_price.toNumber()),
-        total_price: Math.round(item.total_price.toNumber()),
-      })),
-      shippingZone: order.shippingZone
-        ? {
-            ...order.shippingZone,
-            shipping_cost: Math.round(
-              order.shippingZone.shipping_cost.toNumber(),
-            ),
-          }
-        : undefined,
-    };
+    return formatOrderResponse(cancelledOrder);
   }
 }
